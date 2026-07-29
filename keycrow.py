@@ -7,6 +7,7 @@ import ui.splash as splash
 import ui.main_menu as main_menu
 import ui.wifi_menu as wifi_menu
 import ui.settings_menu as settings_menu
+import ui.splash_menu as splash_menu
 import ui.config as config
 from apps.wifi_scan import scan_networks
 
@@ -26,6 +27,28 @@ buttons = {
 def run_splash():
     splash.show(device, buttons["OK"])
 
+def get_max_idx(current):
+    if current == "main":
+        return len(main_menu.ITEMS) - 1
+    elif current == "wifi":
+        return len(wifi_menu.ITEMS) - 1
+    elif current == "settings":
+        return len(settings_menu.ITEMS) - 1
+    elif current == "splash_settings":
+        return len(splash_menu.get_items()) - 1
+    return 0
+
+def redraw(current, selected, scroll_offset):
+    if current == "main":
+        return main_menu.draw(device, selected, scroll_offset)
+    elif current == "wifi":
+        return wifi_menu.draw(device, selected, scroll_offset)
+    elif current == "settings":
+        return settings_menu.draw(device, selected, scroll_offset)
+    elif current == "splash_settings":
+        return splash_menu.draw(device, selected, scroll_offset)
+    return scroll_offset
+
 print("KeyCrow starting...")
 run_splash()
 
@@ -33,35 +56,20 @@ current = "main"
 selected = 0
 scroll_offset = 0
 
-scroll_offset = main_menu.draw(device, selected, scroll_offset)
+scroll_offset = redraw(current, selected, scroll_offset)
 
 try:
     while True:
         if buttons["UP"].is_pressed:
-            selected = max(0, selected - 1)
-            if current == "main":
-                scroll_offset = main_menu.draw(device, selected, scroll_offset)
-            elif current == "wifi":
-                scroll_offset = wifi_menu.draw(device, selected, scroll_offset)
-            elif current == "settings":
-                scroll_offset = settings_menu.draw(device, selected, scroll_offset)
+            max_idx = get_max_idx(current)
+            selected = (selected - 1) % (max_idx + 1)
+            scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.18)
 
         elif buttons["DOWN"].is_pressed:
-            if current == "main":
-                max_idx = len(main_menu.ITEMS) - 1
-            elif current == "wifi":
-                max_idx = len(wifi_menu.ITEMS) - 1
-            else:
-                max_idx = len(settings_menu.get_items()) - 1
-            selected = min(max_idx, selected + 1)
-
-            if current == "main":
-                scroll_offset = main_menu.draw(device, selected, scroll_offset)
-            elif current == "wifi":
-                scroll_offset = wifi_menu.draw(device, selected, scroll_offset)
-            elif current == "settings":
-                scroll_offset = settings_menu.draw(device, selected, scroll_offset)
+            max_idx = get_max_idx(current)
+            selected = (selected + 1) % (max_idx + 1)
+            scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.18)
 
         elif buttons["OK"].is_pressed:
@@ -71,12 +79,12 @@ try:
                     current = "wifi"
                     selected = 0
                     scroll_offset = 0
-                    scroll_offset = wifi_menu.draw(device, selected, scroll_offset)
+                    scroll_offset = redraw(current, selected, scroll_offset)
                 elif choice == "Settings":
                     current = "settings"
                     selected = 0
                     scroll_offset = 0
-                    scroll_offset = settings_menu.draw(device, selected, scroll_offset)
+                    scroll_offset = redraw(current, selected, scroll_offset)
                 else:
                     print(f"Selected: {choice}")
 
@@ -90,21 +98,32 @@ try:
                     current = "main"
                     selected = 0
                     scroll_offset = 0
-                    scroll_offset = main_menu.draw(device, selected, scroll_offset)
+                    scroll_offset = redraw(current, selected, scroll_offset)
 
             elif current == "settings":
-                items = settings_menu.get_items()
-                choice = items[selected]
-
-                if choice.startswith("  → "):
-                    new_splash = choice.replace("  → ", "").strip()
-                    config.set_splash(new_splash)
-                    scroll_offset = settings_menu.draw(device, selected, scroll_offset)
+                choice = settings_menu.ITEMS[selected]
+                if choice == "Splash":
+                    current = "splash_settings"
+                    selected = 0
+                    scroll_offset = 0
+                    scroll_offset = redraw(current, selected, scroll_offset)
                 elif choice == "Back":
                     current = "main"
                     selected = 0
                     scroll_offset = 0
-                    scroll_offset = main_menu.draw(device, selected, scroll_offset)
+                    scroll_offset = redraw(current, selected, scroll_offset)
+
+            elif current == "splash_settings":
+                items = splash_menu.get_items()
+                choice = items[selected]
+                if choice == "Back":
+                    current = "settings"
+                    selected = 0
+                    scroll_offset = 0
+                    scroll_offset = redraw(current, selected, scroll_offset)
+                else:
+                    config.set_splash(choice)
+                    scroll_offset = redraw(current, selected, scroll_offset)
 
             sleep(0.25)
 
@@ -114,12 +133,17 @@ try:
                 current = "main"
                 selected = 0
                 scroll_offset = 0
-                scroll_offset = main_menu.draw(device, selected, scroll_offset)
+                scroll_offset = redraw(current, selected, scroll_offset)
             elif current in ["wifi", "settings"]:
                 current = "main"
                 selected = 0
                 scroll_offset = 0
-                scroll_offset = main_menu.draw(device, selected, scroll_offset)
+                scroll_offset = redraw(current, selected, scroll_offset)
+            elif current == "splash_settings":
+                current = "settings"
+                selected = 0
+                scroll_offset = 0
+                scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.2)
 
         sleep(0.04)
