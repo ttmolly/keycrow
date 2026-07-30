@@ -2,6 +2,7 @@ from PIL import Image, ImageFont
 from luma.core.render import canvas
 from time import sleep
 from pathlib import Path
+import json
 import ui.config as config
 
 SPLASHES_DIR = Path.home() / "keycrow" / "splashes"
@@ -17,9 +18,19 @@ def get_frames(name):
     for f in frame_files:
         try:
             frames.append(Image.open(f).convert("1"))
-        except:
+        except Exception:
             pass
     return frames
+
+def get_fps(name):
+    meta_file = SPLASHES_DIR / name / "meta.json"
+    if meta_file.exists():
+        try:
+            data = json.loads(meta_file.read_text())
+            return max(1, data.get("fps", 30))
+        except Exception:
+            pass
+    return 30
 
 def show_default(device, ok_button):
     blink = True
@@ -48,10 +59,12 @@ def show(device, ok_button):
         show_default(device, ok_button)
         return
 
+    delay = 1.0 / get_fps(name)
+
     while True:
         for frame in frames:
             device.display(frame)
-            sleep(0.03)
+            sleep(delay)
             if ok_button.is_pressed:
                 sleep(0.2)
                 return
