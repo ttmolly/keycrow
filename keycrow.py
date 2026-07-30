@@ -9,6 +9,7 @@ import ui.wifi_menu as wifi_menu
 import ui.settings_menu as settings_menu
 import ui.splash_menu as splash_menu
 import ui.splash_edit as splash_edit
+import ui.status_menu as status_menu
 import ui.config as config
 from apps.wifi_scan import scan_networks
 
@@ -28,7 +29,7 @@ buttons = {
 def run_splash():
     splash.show(device, buttons["OK"])
 
-def get_max_idx(current):
+def get_max_idx(current, status_mode=None):
     if current == "main":
         return len(main_menu.ITEMS) - 1
     elif current == "wifi":
@@ -36,14 +37,20 @@ def get_max_idx(current):
     elif current == "settings":
         return len(settings_menu.ITEMS) - 1
     elif current == "splash_settings":
-        return len(splash_menu.get_items()) - 1
+        return 2
     elif current == "splash_edit_pick":
         return len(splash_menu.get_edit_items()) - 1
     elif current == "splash_edit_save":
         return len(splash_edit.SAVE_ITEMS) - 1
+    elif current == "status_bar":
+        return 2
+    elif current == "status_splash":
+        return len(status_menu.get_splash_items()) - 1
+    elif current == "status_menus":
+        return len(status_menu.get_menu_items()) - 1
     return 0
 
-def redraw(current, selected, scroll_offset):
+def redraw(current, selected, scroll_offset, status_mode=None):
     if current == "main":
         return main_menu.draw(device, selected, scroll_offset)
     elif current == "wifi":
@@ -56,6 +63,12 @@ def redraw(current, selected, scroll_offset):
         return splash_menu.draw_edit_pick(device, selected, scroll_offset)
     elif current == "splash_edit_save":
         return draw_save_menu(selected, scroll_offset)
+    elif current == "status_bar":
+        return status_menu.draw(device, selected, scroll_offset, mode="main")
+    elif current == "status_splash":
+        return status_menu.draw(device, selected, scroll_offset, mode="splash")
+    elif current == "status_menus":
+        return status_menu.draw(device, selected, scroll_offset, mode="menus")
     return scroll_offset
 
 def draw_save_menu(selected, scroll_offset):
@@ -83,24 +96,44 @@ run_splash()
 current = "main"
 selected = 0
 scroll_offset = 0
-pending_edit = None  # (name, values, raw_frames) waiting on save decision
+pending_edit = None
 
 scroll_offset = redraw(current, selected, scroll_offset)
 
 try:
     while True:
+        # ===== UP =====
         if buttons["UP"].is_pressed:
             max_idx = get_max_idx(current)
             selected = (selected - 1) % (max_idx + 1)
             scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.18)
 
+        # ===== DOWN =====
         elif buttons["DOWN"].is_pressed:
             max_idx = get_max_idx(current)
             selected = (selected + 1) % (max_idx + 1)
             scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.18)
 
+        # ===== LEFT / RIGHT =====
+        elif buttons["LEFT"].is_pressed or buttons["RIGHT"].is_pressed:
+            if current == "splash_settings" and selected == 0:
+                available = splash_menu.get_available_splashes()
+                current_name = config.get_splash()
+                try:
+                    idx = available.index(current_name)
+                except ValueError:
+                    idx = 0
+                if buttons["LEFT"].is_pressed:
+                    idx = (idx - 1) % len(available)
+                else:
+                    idx = (idx + 1) % len(available)
+                config.set_splash(available[idx])
+                scroll_offset = redraw(current, selected, scroll_offset)
+                sleep(0.18)
+
+        # ===== OK =====
         elif buttons["OK"].is_pressed:
             if current == "main":
                 choice = main_menu.ITEMS[selected]
@@ -131,7 +164,12 @@ try:
 
             elif current == "settings":
                 choice = settings_menu.ITEMS[selected]
-                if choice == "Splash":
+                if choice == "Status Bar":
+                    current = "status_bar"
+                    selected = 0
+                    scroll_offset = 0
+                    scroll_offset = redraw(current, selected, scroll_offset)
+                elif choice == "Splash":
                     current = "splash_settings"
                     selected = 0
                     scroll_offset = 0
@@ -142,21 +180,55 @@ try:
                     scroll_offset = 0
                     scroll_offset = redraw(current, selected, scroll_offset)
 
-            elif current == "splash_settings":
-                items = splash_menu.get_items()
-                choice = items[selected]
-                if choice == "Edit Splash":
-                    current = "splash_edit_pick"
+            elif current == "status_bar":
+                if selected == 0:
+                    current = "status_splash"
                     selected = 0
                     scroll_offset = 0
                     scroll_offset = redraw(current, selected, scroll_offset)
-                elif choice == "Back":
+                elif selected == 1:
+                    current = "status_menus"
+                    selected = 0
+                    scroll_offset = 0
+                    scroll_offset = redraw(current, selected, scroll_offset)
+                elif selected == 2:
                     current = "settings"
                     selected = 0
                     scroll_offset = 0
                     scroll_offset = redraw(current, selected, scroll_offset)
+
+            elif current == "status_splash":
+                items = status_menu.get_splash_items()
+                if selected == len(items) - 1:
+                    current = "status_bar"
+                    selected = 0
+                    scroll_offset = 0
+                    scroll_offset = redraw(current, selected, scroll_offset)
                 else:
-                    config.set_splash(choice)
+                    status_menu.toggle("splash", selected)
+                    scroll_offset = redraw(current, selected, scroll_offset)
+
+            elif current == "status_menus":
+                items = status_menu.get_menu_items()
+                if selected == len(items) - 1:
+                    current = "status_bar"
+                    selected = 0
+                    scroll_offset = 0
+                    scroll_offset = redraw(current, selected, scroll_offset)
+                else:
+                    status_menu.toggle("menus", selected)
+                    scroll_offset = redraw(current, selected, scroll_offset)
+
+            elif current == "splash_settings":
+                if selected == 1:
+                    current = "splash_edit_pick"
+                    selected = 0
+                    scroll_offset = 0
+                    scroll_offset = redraw(current, selected, scroll_offset)
+                elif selected == 2:
+                    current = "settings"
+                    selected = 0
+                    scroll_offset = 0
                     scroll_offset = redraw(current, selected, scroll_offset)
 
             elif current == "splash_edit_pick":
@@ -186,7 +258,6 @@ try:
                     splash_edit.save_edit(name, values, raw_frames, mode="new")
                 elif choice == "Replace Original":
                     splash_edit.save_edit(name, values, raw_frames, mode="replace")
-                # "Cancel" just discards
                 pending_edit = None
                 current = "splash_edit_pick"
                 selected = 0
@@ -195,6 +266,7 @@ try:
 
             sleep(0.25)
 
+        # ===== BACK =====
         elif buttons["BACK"].is_pressed:
             if current == "main":
                 run_splash()
@@ -204,6 +276,16 @@ try:
                 scroll_offset = redraw(current, selected, scroll_offset)
             elif current in ["wifi", "settings"]:
                 current = "main"
+                selected = 0
+                scroll_offset = 0
+                scroll_offset = redraw(current, selected, scroll_offset)
+            elif current == "status_bar":
+                current = "settings"
+                selected = 0
+                scroll_offset = 0
+                scroll_offset = redraw(current, selected, scroll_offset)
+            elif current in ["status_splash", "status_menus"]:
+                current = "status_bar"
                 selected = 0
                 scroll_offset = 0
                 scroll_offset = redraw(current, selected, scroll_offset)
@@ -225,7 +307,12 @@ try:
                 scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.2)
 
-        sleep(0.04)
+        # Keep redrawing screens that need scrolling text
+        if current in ["splash_settings", "status_splash"]:
+            scroll_offset = redraw(current, selected, scroll_offset)
+            sleep(0.05)
+        else:
+            sleep(0.04)
 
 except KeyboardInterrupt:
     pass

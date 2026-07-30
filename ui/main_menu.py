@@ -1,5 +1,6 @@
 from luma.core.render import canvas
 from PIL import ImageFont
+import ui.status as status
 
 font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 font_item  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
@@ -30,6 +31,10 @@ def draw(device, selected, scroll_offset):
         draw.text((4, 0), "KeyCrow", font=font_title, fill="white")
         draw.line((0, 14, 127, 14), fill="white")
 
+        # ===== Status icons on the right side of the title =====
+        status.draw_menu_icons(draw, y=2)
+
+        # Menu items
         visible = ITEMS[scroll_offset:scroll_offset + VISIBLE_ITEMS]
 
         for row, item in enumerate(visible):

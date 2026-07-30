@@ -1,5 +1,6 @@
 from luma.core.render import canvas
 from PIL import ImageFont
+import ui.status as status
 
 font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 font_item  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
@@ -28,12 +29,14 @@ def draw(device, selected, scroll_offset):
         draw.text((4, 0), "WiFi Tools", font=font_title, fill="white")
         draw.line((0, 14, 127, 14), fill="white")
 
+        # Status icons
+        status.draw_menu_icons(draw, y=2)
+
         visible = ITEMS[scroll_offset:scroll_offset + VISIBLE_ITEMS]
 
         for row, item in enumerate(visible):
             i = scroll_offset + row
             y = LIST_TOP + (row * ITEM_HEIGHT)
-
             if i == selected:
                 draw.rectangle((1, y, 126, y + ITEM_HEIGHT - 1), fill="white")
                 draw.text((5, y + 2), item, font=font_item, fill="black")

@@ -1,4 +1,18 @@
 [splash]
-current = "New-cute-one"
+current = "lips-test"
 
-[ui]
+[status]
+menu_battery = true
+menu_wifi = true
+menu_bluetooth = true
+menu_show_percent = false
+menu_charging = true
+menu_background = "black"
+splash_battery = true
+splash_wifi = true
+splash_bluetooth = true
+splash_show_percent = false
+splash_charging = true
+splash_background = "black"
+splash_position = "top_center"
+splash_order = "battery_wifi_bt"
