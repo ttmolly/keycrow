@@ -14,27 +14,35 @@ from apps.wifi.app import WifiApp
 from apps.status.app import StatusApp
 from apps.status.splash_icons import StatusSplashApp
 from apps.status.menu_icons import StatusMenusApp
+from apps.splash.app import SplashSettingsApp
 
-# Who "back" returns to
 PARENTS = {
     "settings": "main",
     "wifi": "main",
     "status": "settings",
     "status_splash": "status",
     "status_menus": "status",
+    "splash_settings": "settings",
 }
 
-# Actions that open another app
 OPEN_ACTIONS = {
     "wifi": "wifi",
     "settings": "settings",
     "status_bar": "status",
     "status_splash": "status_splash",
     "status_menus": "status_menus",
+    "splash_settings": "splash_settings",
 }
 
-# Apps that need continuous redraw (scrolling text)
-SCROLL_APPS = {"status_splash", "status_menus", "main", "settings", "wifi", "status"}
+SCROLL_APPS = {
+    "status_splash",
+    "status_menus",
+    "main",
+    "settings",
+    "wifi",
+    "status",
+    "splash_settings",
+}
 
 BUTTON_ORDER = ("UP", "DOWN", "LEFT", "RIGHT", "OK", "BACK")
 
@@ -53,10 +61,7 @@ def run():
                 return name
         return None
 
-    # ----- tiny legacy helpers (Splash Settings / Edit only) -----
     def get_max_idx(legacy):
-        if legacy == "splash_settings":
-            return 2
         if legacy == "splash_edit_pick":
             return len(splash_menu.get_edit_items()) - 1
         if legacy == "splash_edit_save":
@@ -64,8 +69,6 @@ def run():
         return 0
 
     def redraw_legacy(legacy, selected, scroll_offset):
-        if legacy == "splash_settings":
-            return splash_menu.draw(device, selected, scroll_offset)
         if legacy == "splash_edit_pick":
             return splash_menu.draw_edit_pick(device, selected, scroll_offset)
         if legacy == "splash_edit_save":
@@ -95,7 +98,6 @@ def run():
                     draw.text((5, y + 2), item, font=font_item, fill="white")
         return scroll_offset
 
-    # ----- bootstrap -----
     print("KeyCrow starting...")
     run_splash()
 
@@ -107,9 +109,9 @@ def run():
         StatusApp(),
         StatusSplashApp(),
         StatusMenusApp(),
+        SplashSettingsApp(),
     ]
     for app in apps:
-        # give hardware to apps that need it
         app.device = device
         app.buttons = buttons
         manager.register(app)
@@ -134,8 +136,8 @@ def run():
             manager.current().draw(device)
             return
 
-        if action == "splash_settings":
-            legacy = "splash_settings"
+        if action == "splash_edit_pick":
+            legacy = "splash_edit_pick"
             selected = 0
             scroll_offset = 0
             scroll_offset = redraw_legacy(legacy, selected, scroll_offset)
@@ -155,7 +157,7 @@ def run():
 
     try:
         while True:
-            # ===== LEGACY (temporary) =====
+            # ===== LEGACY: splash edit only =====
             if legacy is not None:
                 btn = poll_button()
                 if btn == "UP":
@@ -168,39 +170,14 @@ def run():
                     selected = (selected + 1) % (max_idx + 1)
                     scroll_offset = redraw_legacy(legacy, selected, scroll_offset)
                     sleep(0.18)
-                elif btn in ("LEFT", "RIGHT") and legacy == "splash_settings" and selected == 0:
-                    available = splash_menu.get_available_splashes()
-                    current_name = config.get_splash()
-                    try:
-                        idx = available.index(current_name)
-                    except ValueError:
-                        idx = 0
-                    if btn == "LEFT":
-                        idx = (idx - 1) % len(available)
-                    else:
-                        idx = (idx + 1) % len(available)
-                    config.set_splash(available[idx])
-                    scroll_offset = redraw_legacy(legacy, selected, scroll_offset)
-                    sleep(0.18)
                 elif btn == "OK":
-                    if legacy == "splash_settings":
-                        if selected == 1:
-                            legacy = "splash_edit_pick"
-                            selected = 0
-                            scroll_offset = 0
-                            scroll_offset = redraw_legacy(legacy, selected, scroll_offset)
-                        elif selected == 2:
-                            legacy = None
-                            manager.open("settings")
-                            manager.current().draw(device)
-                    elif legacy == "splash_edit_pick":
+                    if legacy == "splash_edit_pick":
                         items = splash_menu.get_edit_items()
                         choice = items[selected]
                         if choice == "Back":
-                            legacy = "splash_settings"
-                            selected = 0
-                            scroll_offset = 0
-                            scroll_offset = redraw_legacy(legacy, selected, scroll_offset)
+                            legacy = None
+                            manager.open("splash_settings")
+                            manager.current().draw(device)
                         else:
                             result = splash_edit.run_edit(device, buttons, choice)
                             if result is None:
@@ -226,15 +203,10 @@ def run():
                         scroll_offset = redraw_legacy(legacy, selected, scroll_offset)
                     sleep(0.25)
                 elif btn == "BACK":
-                    if legacy == "splash_settings":
+                    if legacy == "splash_edit_pick":
                         legacy = None
-                        manager.open("settings")
+                        manager.open("splash_settings")
                         manager.current().draw(device)
-                    elif legacy == "splash_edit_pick":
-                        legacy = "splash_settings"
-                        selected = 0
-                        scroll_offset = 0
-                        scroll_offset = redraw_legacy(legacy, selected, scroll_offset)
                     elif legacy == "splash_edit_save":
                         pending_edit = None
                         legacy = "splash_edit_pick"
@@ -243,11 +215,7 @@ def run():
                         scroll_offset = redraw_legacy(legacy, selected, scroll_offset)
                     sleep(0.2)
                 else:
-                    if legacy == "splash_settings":
-                        scroll_offset = redraw_legacy(legacy, selected, scroll_offset)
-                        sleep(0.05)
-                    else:
-                        sleep(0.04)
+                    sleep(0.04)
                 continue
 
             # ===== GENERIC APP LOOP =====
@@ -263,7 +231,12 @@ def run():
                     navigate(action)
                 else:
                     app.draw(device)
-                sleep(0.18 if btn in ("UP", "DOWN", "LEFT", "RIGHT") else 0.25 if btn == "OK" else 0.2)
+                if btn in ("UP", "DOWN", "LEFT", "RIGHT"):
+                    sleep(0.18)
+                elif btn == "OK":
+                    sleep(0.25)
+                else:
+                    sleep(0.2)
             else:
                 if manager.current_name() in SCROLL_APPS:
                     app.draw(device)
