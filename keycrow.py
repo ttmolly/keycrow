@@ -16,6 +16,8 @@ from apps.main.app import MainMenuApp
 from apps.settings.app import SettingsApp
 from apps.wifi.app import WifiApp
 from apps.status.app import StatusApp
+from apps.status.splash_icons import StatusSplashApp
+from apps.status.menu_icons import StatusMenusApp
 from apps.wifi_scan import scan_networks
 
 # ===== Hardware =====
@@ -35,10 +37,6 @@ def get_max_idx(current):
         return len(splash_menu.get_edit_items()) - 1
     elif current == "splash_edit_save":
         return len(splash_edit.SAVE_ITEMS) - 1
-    elif current == "status_splash":
-        return len(status_menu.get_splash_items()) - 1
-    elif current == "status_menus":
-        return len(status_menu.get_menu_items()) - 1
     return 0
 
 
@@ -49,10 +47,6 @@ def redraw(current, selected, scroll_offset):
         return splash_menu.draw_edit_pick(device, selected, scroll_offset)
     elif current == "splash_edit_save":
         return draw_save_menu(selected, scroll_offset)
-    elif current == "status_splash":
-        return status_menu.draw(device, selected, scroll_offset, mode="splash")
-    elif current == "status_menus":
-        return status_menu.draw(device, selected, scroll_offset, mode="menus")
     return scroll_offset
 
 
@@ -85,10 +79,12 @@ manager.register(MainMenuApp())
 manager.register(SettingsApp())
 manager.register(WifiApp())
 manager.register(StatusApp())
+manager.register(StatusSplashApp())
+manager.register(StatusMenusApp())
 manager.push("main")
 
-# App-owned: main, settings_app, wifi_app, status_app
-# Legacy: status_splash, status_menus, splash_settings, splash_edit_*
+# App-owned screens
+# Legacy remaining: splash_settings, splash_edit_*
 current = "main"
 selected = 0
 scroll_offset = 0
@@ -232,15 +228,13 @@ try:
                 sleep(0.2)
 
             if action == "status_splash":
-                current = "status_splash"
-                selected = 0
-                scroll_offset = 0
-                scroll_offset = redraw(current, selected, scroll_offset)
+                current = "status_splash_app"
+                manager._apps["status_splash"].on_enter()
+                manager._apps["status_splash"].draw(device)
             elif action == "status_menus":
-                current = "status_menus"
-                selected = 0
-                scroll_offset = 0
-                scroll_offset = redraw(current, selected, scroll_offset)
+                current = "status_menus_app"
+                manager._apps["status_menus"].on_enter()
+                manager._apps["status_menus"].draw(device)
             elif action == "back":
                 current = "settings_app"
                 manager._apps["settings"].draw(device)
@@ -248,7 +242,63 @@ try:
             sleep(0.04)
             continue
 
-        # ---------- LEGACY SCREENS ----------
+        # ---------- STATUS SPLASH APP ----------
+        if current == "status_splash_app":
+            app = manager._apps["status_splash"]
+            action = None
+
+            if buttons.is_pressed("UP"):
+                action = app.handle_input("UP")
+                app.draw(device)
+                sleep(0.18)
+            elif buttons.is_pressed("DOWN"):
+                action = app.handle_input("DOWN")
+                app.draw(device)
+                sleep(0.18)
+            elif buttons.is_pressed("OK"):
+                action = app.handle_input("OK")
+                app.draw(device)  # refresh after toggle
+                sleep(0.25)
+            elif buttons.is_pressed("BACK"):
+                action = app.handle_input("BACK")
+                sleep(0.2)
+
+            if action == "back":
+                current = "status_app"
+                manager._apps["status"].draw(device)
+
+            sleep(0.04)
+            continue
+
+        # ---------- STATUS MENUS APP ----------
+        if current == "status_menus_app":
+            app = manager._apps["status_menus"]
+            action = None
+
+            if buttons.is_pressed("UP"):
+                action = app.handle_input("UP")
+                app.draw(device)
+                sleep(0.18)
+            elif buttons.is_pressed("DOWN"):
+                action = app.handle_input("DOWN")
+                app.draw(device)
+                sleep(0.18)
+            elif buttons.is_pressed("OK"):
+                action = app.handle_input("OK")
+                app.draw(device)  # refresh after toggle
+                sleep(0.25)
+            elif buttons.is_pressed("BACK"):
+                action = app.handle_input("BACK")
+                sleep(0.2)
+
+            if action == "back":
+                current = "status_app"
+                manager._apps["status"].draw(device)
+
+            sleep(0.04)
+            continue
+
+        # ---------- LEGACY (splash settings / edit only) ----------
         if buttons.is_pressed("UP"):
             max_idx = get_max_idx(current)
             selected = (selected - 1) % (max_idx + 1)
@@ -278,25 +328,7 @@ try:
                 sleep(0.18)
 
         elif buttons.is_pressed("OK"):
-            if current == "status_splash":
-                items = status_menu.get_splash_items()
-                if selected == len(items) - 1:
-                    current = "status_app"
-                    manager._apps["status"].draw(device)
-                else:
-                    status_menu.toggle("splash", selected)
-                    scroll_offset = redraw(current, selected, scroll_offset)
-
-            elif current == "status_menus":
-                items = status_menu.get_menu_items()
-                if selected == len(items) - 1:
-                    current = "status_app"
-                    manager._apps["status"].draw(device)
-                else:
-                    status_menu.toggle("menus", selected)
-                    scroll_offset = redraw(current, selected, scroll_offset)
-
-            elif current == "splash_settings":
+            if current == "splash_settings":
                 if selected == 1:
                     current = "splash_edit_pick"
                     selected = 0
@@ -342,10 +374,7 @@ try:
             sleep(0.25)
 
         elif buttons.is_pressed("BACK"):
-            if current in ["status_splash", "status_menus"]:
-                current = "status_app"
-                manager._apps["status"].draw(device)
-            elif current == "splash_settings":
+            if current == "splash_settings":
                 current = "settings_app"
                 manager._apps["settings"].draw(device)
             elif current == "splash_edit_pick":
@@ -361,7 +390,7 @@ try:
                 scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.2)
 
-        if current in ["splash_settings", "status_splash", "status_menus"]:
+        if current in ["splash_settings"]:
             scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.05)
         else:
