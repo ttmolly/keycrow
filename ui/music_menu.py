@@ -5,21 +5,12 @@ import ui.status as status
 font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 font_item  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
 
-ITEMS = [
-    "WiFi Tools",
-    "Sub-GHz",
-    "IR Remote",
-    "Archive",
-    "Music",
-    "Settings",
-    "About"
-]
-
 LIST_TOP = 16
 ITEM_HEIGHT = 15
 VISIBLE_ITEMS = 3
 
-def draw(device, selected, scroll_offset):
+
+def draw(device, labels, selected, scroll_offset, title="Music"):
     if selected < scroll_offset:
         scroll_offset = selected
     elif selected >= scroll_offset + VISIBLE_ITEMS:
@@ -28,30 +19,26 @@ def draw(device, selected, scroll_offset):
     with canvas(device) as draw:
         draw.rectangle(device.bounding_box, outline="black", fill="black")
 
-        # Title
-        draw.text((4, 0), "KeyCrow", font=font_title, fill="white")
+        draw.text((4, 0), title, font=font_title, fill="white")
         draw.line((0, 14, 127, 14), fill="white")
-
-        # ===== Status icons on the right side of the title =====
         status.draw_menu_icons(draw, y=2)
 
-        # Menu items
-        visible = ITEMS[scroll_offset:scroll_offset + VISIBLE_ITEMS]
+        visible = labels[scroll_offset:scroll_offset + VISIBLE_ITEMS]
 
         for row, item in enumerate(visible):
             i = scroll_offset + row
             y = LIST_TOP + (row * ITEM_HEIGHT)
+            label = item if len(item) <= 18 else item[:17] + "…"
 
             if i == selected:
                 draw.rectangle((1, y, 126, y + ITEM_HEIGHT - 1), fill="white")
-                draw.text((5, y + 2), item, font=font_item, fill="black")
+                draw.text((5, y + 2), label, font=font_item, fill="black")
             else:
-                draw.text((5, y + 2), item, font=font_item, fill="white")
+                draw.text((5, y + 2), label, font=font_item, fill="white")
 
-        # Scroll indicators
         if scroll_offset > 0:
             draw.text((119, LIST_TOP), "^", font=font_item, fill="white")
-        if scroll_offset + VISIBLE_ITEMS < len(ITEMS):
+        if scroll_offset + VISIBLE_ITEMS < len(labels):
             draw.text((119, LIST_TOP + (VISIBLE_ITEMS - 1) * ITEM_HEIGHT), "v", font=font_item, fill="white")
 
     return scroll_offset

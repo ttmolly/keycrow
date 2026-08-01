@@ -22,9 +22,12 @@ def _cfg():
 # ===== Shared state between the HTTP server thread and the OLED loop =====
 _lock = threading.Lock()
 _state = {
-    "phase": "idle",       # idle | scanning | list_ready | rescanning | connecting | success | failed
+    "phase": "idle",       # idle | scanning | list_ready | rescanning | connecting | checking | success | failed
     "networks": [],        # [{"ssid": str, "signal": int}, ...]
     "message": "",
+    "ip": "",
+    "ping_target": "",
+    "ping_ok": False,
 }
 
 def _set_state(**kwargs):
@@ -82,10 +85,50 @@ def start_ap():
           "ipv4.addresses", f"{ip}/24",
           "wifi-sec.key-mgmt", "wpa-psk",
           "wifi-sec.psk", password])
-    _run(["nmcli", "connection", "up", AP_CON_NAME])
+
+    try:
+        proc = subprocess.run(["nmcli", "connection", "up", AP_CON_NAME],
+                               capture_output=True, text=True, timeout=20)
+        up_err = (proc.stderr or proc.stdout or "").strip()
+    except Exception as e:
+        up_err = str(e)
+
+    # Don't trust the exit code alone -- we've already seen nmcli report
+    # success (silently, no error) while the AP never actually came up
+    # (e.g. the polkit permissions issue). Confirm against real state.
+    state = _run(["nmcli", "-g", "GENERAL.STATE", "connection", "show", AP_CON_NAME]).strip()
+    really_up = state.startswith("activated")
+
+    if not really_up:
+        print(f"[wifi_setup] AP failed to come up. nmcli said: {up_err!r} state: {state!r}")
+
+    return really_up
 
 def stop_ap():
     _run(["nmcli", "connection", "down", AP_CON_NAME])
+
+def _get_ip():
+    """wlan0's current IPv4 address, or '' if it doesn't have one (yet)."""
+    out = _run(["nmcli", "-g", "IP4.ADDRESS", "device", "show", "wlan0"], timeout=5)
+    first = out.strip().split("\n")[0] if out.strip() else ""
+    return first.split("/")[0] if first else ""
+
+def _get_gateway():
+    out = _run(["nmcli", "-g", "IP4.GATEWAY", "device", "show", "wlan0"], timeout=5)
+    return out.strip().split("\n")[0] if out.strip() else ""
+
+def _ping(host, count=3, timeout=2):
+    """True if host answers, False otherwise (or if there's no host to try)."""
+    if not host:
+        return False
+    try:
+        proc = subprocess.run(
+            ["ping", "-c", str(count), "-W", str(timeout), host],
+            capture_output=True, text=True, timeout=count * timeout + 3
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
 
 def _rescan_worker():
     """Runs in a background thread. Briefly drops the AP to get a live
@@ -95,8 +138,29 @@ def _rescan_worker():
     stop_ap()
     sleep(1)
     networks = scan_networks()
-    start_ap()
-    _set_state(phase="list_ready", networks=networks, message="")
+    ap_ok = start_ap()
+    msg = "" if ap_ok else "AP FAILED to restart - see console"
+    _set_state(phase="list_ready", networks=networks, message=msg)
+
+def _forget_saved_profile(ssid):
+    """Delete any existing saved connection profile matching this SSID
+    (except the AP's own profile). Without this, 'nmcli device wifi
+    connect' silently reuses a pre-existing profile and IGNORES the
+    password just typed into the portal -- if that old profile's stored
+    secret is stale, the connect fails with no useful explanation."""
+    out = _run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"])
+    for line in out.strip().split("\n"):
+        if not line:
+            continue
+        parts = line.rsplit(":", 1)
+        if len(parts) != 2:
+            continue
+        name, ctype = parts
+        if ctype != "802-11-wireless" or name == AP_CON_NAME:
+            continue
+        profile_ssid = _run(["nmcli", "-g", "802-11-wireless.ssid", "connection", "show", name]).strip()
+        if profile_ssid == ssid:
+            _run(["nmcli", "connection", "delete", name])
 
 def _connect_worker(ssid, password):
     """Runs in a background thread. Tears down the AP as a side effect,
@@ -106,24 +170,65 @@ def _connect_worker(ssid, password):
     _set_state(phase="connecting", message=f"Connecting to {ssid}...")
     stop_ap()
     sleep(1)
+    _forget_saved_profile(ssid)
 
-    cmd = ["nmcli", "device", "wifi", "connect", ssid]
+    # The network list in the portal could be a minute+ old by the time the
+    # user actually taps Connect -- refresh it for this specific SSID so a
+    # since-expired scan cache entry (common on weaker/5GHz signals) doesn't
+    # cause a bogus "no network found" failure.
+    _run(["nmcli", "device", "wifi", "rescan", "ifname", "wlan0", "ssid", ssid], timeout=10)
+    sleep(2)
+
+    cmd = ["nmcli", "-w", "35", "device", "wifi", "connect", ssid]
     if password:
         cmd += ["password", password]
 
+    err_output = ""
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
         success = proc.returncode == 0
-    except Exception:
+        err_output = (proc.stderr or proc.stdout or "").strip()
+    except subprocess.TimeoutExpired:
         success = False
+        err_output = "nmcli timed out"
+    except Exception as e:
+        success = False
+        err_output = str(e)
 
     if success:
-        _set_state(phase="success", message=f"Connected to {ssid}!")
+        _set_state(phase="checking", message="Getting IP address...")
+
+        # DHCP can take a couple seconds after association succeeds
+        ip = ""
+        for _ in range(6):
+            ip = _get_ip()
+            if ip:
+                break
+            sleep(1)
+
+        gateway = _get_gateway()
+        ping_target = gateway or "8.8.8.8"
+        _set_state(message=f"Pinging {ping_target}...")
+        ping_ok = _ping(ping_target) if ip else False
+
+        if ip:
+            msg = f"Connected to {ssid}!"
+        else:
+            msg = f"Joined {ssid} but no IP yet"
+
+        _set_state(phase="success", message=msg, ip=ip, ping_target=ping_target, ping_ok=ping_ok)
     else:
-        _set_state(phase="failed", message=f"Failed to connect to {ssid}.")
+        # Print the real reason to the console (visible over SSH) since
+        # the OLED only has room for ~24 characters.
+        print(f"[wifi_setup] connect to {ssid!r} failed: {err_output}")
+        reason = err_output.replace("Error: ", "").strip() or "unknown error"
+        _set_state(phase="failed", message=f"Failed: {reason[:24]}")
         sleep(2)
-        start_ap()
-        _set_state(phase="list_ready", message="Setup AP restarted. Try again.")
+        ap_ok = start_ap()
+        if ap_ok:
+            _set_state(phase="list_ready", message="Setup AP restarted. Try again.")
+        else:
+            _set_state(phase="list_ready", message="AP restart FAILED - see console")
 
 # ===== Web portal =====
 PORTAL_HTML = """<!doctype html>
@@ -290,6 +395,13 @@ def run(device, buttons):
             if line2:
                 draw.text((4, 36), line2, font=font_small, fill="white")
 
+    # Take full manual control of wlan0 for the whole setup session. Without
+    # this, the instant the AP (or any connection) drops, NetworkManager's
+    # own policy immediately tries to auto-activate whatever saved profile
+    # it likes best -- racing our own explicit connect commands and
+    # sometimes winning, landing you on the wrong network.
+    _run(["nmcli", "device", "set", "wlan0", "autoconnect", "no"])
+
     # Pre-scan BEFORE the AP goes up, while the radio is still free to scan
     _set_state(phase="scanning", message="Scanning nearby networks...")
     _draw_simple("Scanning nearby", "networks...")
@@ -297,13 +409,39 @@ def run(device, buttons):
     _set_state(networks=networks)
 
     _draw_simple("Starting setup", "access point...")
-    start_ap()
+    ap_ok = start_ap()
     start_server()
-    _set_state(phase="list_ready", message="")
+    if ap_ok:
+        _set_state(phase="list_ready", message="")
+    else:
+        _set_state(phase="list_ready", message="AP FAILED - see console")
 
     try:
         while True:
             st = _get_state()
+
+            if st["phase"] == "success":
+                # Dedicated result screen — held until the user presses BACK,
+                # since this is the one thing they actually need to read.
+                with canvas(device) as draw:
+                    draw.rectangle(device.bounding_box, outline="black", fill="black")
+                    draw.text((4, 0), "WiFi Setup", font=font_title, fill="white")
+                    draw.line((0, 14, 127, 14), fill="white")
+                    status.draw_menu_icons(draw, y=2)
+
+                    y = 17
+                    draw.text((4, y), st["message"][:24], font=font_item, fill="white"); y += 13
+                    draw.text((4, y), f"IP: {st['ip'] or '(none yet)'}", font=font_small, fill="white"); y += 11
+                    ping_label = "OK" if st["ping_ok"] else "FAILED"
+                    draw.text((4, y), f"Ping {st['ping_target']}: {ping_label}", font=font_small, fill="white"); y += 11
+                    draw.text((4, y), "BACK to exit", font=font_small, fill="white")
+
+                if buttons.is_pressed("BACK"):
+                    sleep(0.2)
+                    break
+
+                sleep(0.2)
+                continue
 
             with canvas(device) as draw:
                 draw.rectangle(device.bounding_box, outline="black", fill="black")
@@ -319,11 +457,7 @@ def run(device, buttons):
                 if st["message"]:
                     draw.text((4, y), st["message"][:24], font=font_small, fill="white")
 
-            if st["phase"] == "success":
-                sleep(2)
-                break
-
-            if buttons["BACK"].is_pressed:
+            if buttons.is_pressed("BACK"):
                 sleep(0.2)
                 break
 
@@ -331,3 +465,6 @@ def run(device, buttons):
     finally:
         stop_server()
         stop_ap()
+        # Hand control of wlan0 back to NetworkManager's normal policy --
+        # e.g. so it reconnects on its own after a reboot.
+        _run(["nmcli", "device", "set", "wlan0", "autoconnect", "yes"])

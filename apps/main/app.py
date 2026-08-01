@@ -41,6 +41,8 @@ class MainMenuApp(BaseApp):
                 return "wifi"
             if choice == "Settings":
                 return "settings"
+            if choice == "Music":
+                return "music"
             print(f"Selected: {choice}")
             return None
 

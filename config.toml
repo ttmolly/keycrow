@@ -5,7 +5,7 @@ current = "moka-short-hair"
 menu_battery = true
 menu_wifi = true
 menu_bluetooth = true
-menu_show_percent = false
+menu_show_percent = true
 menu_charging = true
 menu_background = "black"
 splash_battery = true
@@ -22,3 +22,7 @@ ap_ssid = "KeyCrow-Setup"
 ap_password = "keycrow123"
 portal_ip = "10.42.0.1"
 portal_port = 8080
+
+[music]
+bt_mac = "C6:AE:E3:35:6F:0B"
+output = "bluetooth"

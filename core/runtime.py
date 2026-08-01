@@ -13,6 +13,7 @@ from apps.status.splash_icons import StatusSplashApp
 from apps.status.menu_icons import StatusMenusApp
 from apps.splash.app import SplashSettingsApp
 from apps.splash_edit.app import SplashEditPickApp, SplashEditSaveApp
+from apps.music.app import MusicApp
 
 PARENTS = {
     "settings": "main",
@@ -23,6 +24,7 @@ PARENTS = {
     "splash_settings": "settings",
     "splash_edit_pick": "splash_settings",
     "splash_edit_save": "splash_edit_pick",
+    "music": "main",
 }
 
 OPEN_ACTIONS = {
@@ -34,6 +36,7 @@ OPEN_ACTIONS = {
     "splash_settings": "splash_settings",
     "splash_edit_pick": "splash_edit_pick",
     "splash_edit_save": "splash_edit_save",
+    "music": "music",
 }
 
 SCROLL_APPS = {
@@ -44,6 +47,7 @@ SCROLL_APPS = {
     "wifi",
     "status",
     "splash_settings",
+    "music",
 }
 
 BUTTON_ORDER = ("UP", "DOWN", "LEFT", "RIGHT", "OK", "BACK")
@@ -78,6 +82,7 @@ def run():
         SplashSettingsApp(),
         SplashEditPickApp(save_app),
         save_app,
+        MusicApp(),
     ]
     for app in apps:
         app.device = device
