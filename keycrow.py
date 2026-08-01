@@ -1,6 +1,5 @@
 from luma.core.interface.serial import i2c
 from luma.oled.device import ssd1306
-from gpiozero import Button
 from time import sleep
 
 import ui.splash as splash
@@ -10,25 +9,17 @@ import ui.settings_menu as settings_menu
 import ui.splash_menu as splash_menu
 import ui.splash_edit as splash_edit
 import ui.status_menu as status_menu
-import ui.wifi_setup as wifi_setup
 import core.config as config
+from core.input import ButtonInput
 from apps.wifi_scan import scan_networks
 
 # ===== Hardware =====
 serial = i2c(port=1, address=0x3D)
 device = ssd1306(serial)
-
-buttons = {
-    "UP":    Button(17, pull_up=True, bounce_time=0.08),
-    "DOWN":  Button(27, pull_up=True, bounce_time=0.08),
-    "LEFT":  Button(22, pull_up=True, bounce_time=0.08),
-    "RIGHT": Button(23, pull_up=True, bounce_time=0.08),
-    "OK":    Button(24, pull_up=True, bounce_time=0.08),
-    "BACK":  Button(25, pull_up=True, bounce_time=0.08),
-}
+buttons = ButtonInput()
 
 def run_splash():
-    splash.show(device, buttons["OK"])
+    splash.show(device, buttons.get("OK"))
 
 def get_max_idx(current, status_mode=None):
     if current == "main":
@@ -104,21 +95,21 @@ scroll_offset = redraw(current, selected, scroll_offset)
 try:
     while True:
         # ===== UP =====
-        if buttons["UP"].is_pressed:
+        if buttons.is_pressed("UP"):
             max_idx = get_max_idx(current)
             selected = (selected - 1) % (max_idx + 1)
             scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.18)
 
         # ===== DOWN =====
-        elif buttons["DOWN"].is_pressed:
+        elif buttons.is_pressed("DOWN"):
             max_idx = get_max_idx(current)
             selected = (selected + 1) % (max_idx + 1)
             scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.18)
 
         # ===== LEFT / RIGHT =====
-        elif buttons["LEFT"].is_pressed or buttons["RIGHT"].is_pressed:
+        elif buttons.is_pressed("LEFT") or buttons.is_pressed("RIGHT"):
             if current == "splash_settings" and selected == 0:
                 available = splash_menu.get_available_splashes()
                 current_name = config.get_splash()
@@ -126,7 +117,7 @@ try:
                     idx = available.index(current_name)
                 except ValueError:
                     idx = 0
-                if buttons["LEFT"].is_pressed:
+                if buttons.is_pressed("LEFT"):
                     idx = (idx - 1) % len(available)
                 else:
                     idx = (idx + 1) % len(available)
@@ -135,7 +126,7 @@ try:
                 sleep(0.18)
 
         # ===== OK =====
-        elif buttons["OK"].is_pressed:
+        elif buttons.is_pressed("OK"):
             if current == "main":
                 choice = main_menu.ITEMS[selected]
                 if choice == "WiFi Tools":
@@ -158,7 +149,11 @@ try:
                     nets = scan_networks()
                     print("Found:", nets)
                 elif choice == "Connect":
-                    wifi_setup.run(device, buttons)
+                    try:
+                        import ui.wifi_setup as wifi_setup
+                        wifi_setup.run(device, buttons)
+                    except Exception as e:
+                        print("WiFi setup error:", e)
                     scroll_offset = redraw(current, selected, scroll_offset)
                 elif choice == "Back":
                     current = "main"
@@ -271,7 +266,7 @@ try:
             sleep(0.25)
 
         # ===== BACK =====
-        elif buttons["BACK"].is_pressed:
+        elif buttons.is_pressed("BACK"):
             if current == "main":
                 run_splash()
                 current = "main"
@@ -312,7 +307,7 @@ try:
             sleep(0.2)
 
         # Keep redrawing screens that need scrolling text
-        if current in ["splash_settings", "status_splash"]:
+        if current in ["splash_settings", "status_splash", "status_menus"]:
             scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.05)
         else:
