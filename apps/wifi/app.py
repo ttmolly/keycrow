@@ -1,20 +1,16 @@
 from core.app import BaseApp
 import ui.wifi_menu as wifi_menu
+from apps.wifi_scan import scan_networks
 
 
 class WifiApp(BaseApp):
-    """
-    Third KeyCrow application.
-    Owns the WiFi Tools menu workflow.
-    Still uses ui.wifi_menu for drawing (temporary).
-    Does not own scan/connect logic yet.
-    """
-
     name = "wifi"
 
     def __init__(self):
         self.selected = 0
         self.scroll_offset = 0
+        self.device = None
+        self.buttons = None
 
     def on_enter(self):
         self.selected = 0
@@ -39,9 +35,18 @@ class WifiApp(BaseApp):
         if button == "OK":
             choice = wifi_menu.ITEMS[self.selected]
             if choice == "Scan Networks":
-                return "scan"
+                print("Scanning WiFi...")
+                nets = scan_networks()
+                print("Found:", nets)
+                return None
             if choice == "Connect":
-                return "connect"
+                try:
+                    import ui.wifi_setup as wifi_setup
+                    if self.device and self.buttons:
+                        wifi_setup.run(self.device, self.buttons)
+                except Exception as e:
+                    print("WiFi setup error:", e)
+                return None
             if choice == "Back":
                 return "back"
             return None
