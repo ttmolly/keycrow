@@ -48,8 +48,7 @@ def enhance(img, values):
 
 
 def _draw_frame(device, gray_frame, param, value):
-    frame = enhance(gray_frame, {"Brightness": 0, "Contrast": 0, "Speed": 0} if False else _current_values).convert("1") \
-        if False else enhance(gray_frame, _current_values).convert("1")
+    frame = enhance(gray_frame, _current_values).convert("1")
     d = ImageDraw.Draw(frame)
     label = f"{param} {value:+d}" if param != "Speed" else f"{param} {value}fps"
     d.rectangle((0, 0, 74, 10), fill="black")
@@ -68,6 +67,26 @@ def _no_frames_message(device):
     sleep(1.2)
 
 
+font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+font_item = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+
+
+def draw_save(device, selected, scroll_offset):
+    """Draw the 'Save as New / Replace Original / Cancel' menu."""
+    with canvas(device) as draw:
+        draw.rectangle(device.bounding_box, outline="black", fill="black")
+        draw.text((4, 0), "Save Edit", font=font_title, fill="white")
+        draw.line((0, 14, 127, 14), fill="white")
+        for i, item in enumerate(SAVE_ITEMS):
+            y = 16 + (i * 15)
+            if i == selected:
+                draw.rectangle((1, y, 126, y + 14), fill="white")
+                draw.text((5, y + 2), item, font=font_item, fill="black")
+            else:
+                draw.text((5, y + 2), item, font=font_item, fill="white")
+    return scroll_offset
+
+
 def run_edit(device, buttons, name):
     """Blocking, like run_splash(). Returns (values, raw_frames) to save, or None if cancelled."""
     global _current_values
@@ -83,41 +102,39 @@ def run_edit(device, buttons, name):
         param = PARAMS[param_idx]
         delay = 1.0 / max(1, _current_values["Speed"])
 
-        # "Flash" — play the whole animation once with current settings
         for raw in raw_frames:
             _draw_frame(device, raw, param, _current_values[param])
             sleep(delay)
-            if buttons["OK"].is_pressed:
+            if buttons.is_pressed("OK"):
                 sleep(0.2)
                 return _current_values, raw_frames
-            if buttons["BACK"].is_pressed:
+            if buttons.is_pressed("BACK"):
                 sleep(0.2)
                 return None
 
-        # Hold on last frame, wait for next input
         while True:
-            if buttons["UP"].is_pressed:
+            if buttons.is_pressed("UP"):
                 param_idx = (param_idx - 1) % len(PARAMS)
                 sleep(0.18)
                 break
-            elif buttons["DOWN"].is_pressed:
+            elif buttons.is_pressed("DOWN"):
                 param_idx = (param_idx + 1) % len(PARAMS)
                 sleep(0.18)
                 break
-            elif buttons["LEFT"].is_pressed:
+            elif buttons.is_pressed("LEFT"):
                 lo, hi = LIMITS[param]
                 _current_values[param] = max(lo, _current_values[param] - STEP[param])
                 sleep(0.15)
                 break
-            elif buttons["RIGHT"].is_pressed:
+            elif buttons.is_pressed("RIGHT"):
                 lo, hi = LIMITS[param]
                 _current_values[param] = min(hi, _current_values[param] + STEP[param])
                 sleep(0.15)
                 break
-            elif buttons["OK"].is_pressed:
+            elif buttons.is_pressed("OK"):
                 sleep(0.2)
                 return _current_values, raw_frames
-            elif buttons["BACK"].is_pressed:
+            elif buttons.is_pressed("BACK"):
                 sleep(0.2)
                 return None
             sleep(0.04)
@@ -144,4 +161,3 @@ def save_edit(name, values, raw_frames, mode):
 
     (target / "meta.json").write_text(json.dumps({"fps": values["Speed"]}))
     return final_name
-

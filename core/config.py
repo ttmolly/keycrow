@@ -5,7 +5,6 @@ CONFIG_PATH = Path.home() / "keycrow" / "config.toml"
 
 def load():
     if not CONFIG_PATH.exists():
-        # Create default if missing
         default = {
             "splash": {"current": "default"},
             "ui": {}
@@ -27,4 +26,16 @@ def set_splash(name: str):
     if "splash" not in cfg:
         cfg["splash"] = {}
     cfg["splash"]["current"] = name
+    save(cfg)
+
+def get_status_dict():
+    """Return the whole 'status' config section (status bar icon settings)."""
+    cfg = load()
+    return cfg.get("status", {})
+
+def set_status(key: str, value):
+    cfg = load()
+    if "status" not in cfg:
+        cfg["status"] = {}
+    cfg["status"][key] = value
     save(cfg)
