@@ -1,3 +1,4 @@
+import os
 import subprocess
 import signal
 import re
@@ -6,14 +7,23 @@ import time
 from pathlib import Path
 
 MUSIC_DIR = Path.home() / "keycrow" / "music"
-
 DEVICE_RE = re.compile(r"Device\s+([0-9A-Fa-f:]{17})\s+(.+)$")
-NAME_LINE_RE = re.compile(r"Device\s+([0-9A-Fa-f:]{17})\s+(Name|Alias):\s*(.+)$")
-SKIP_PREFIXES = ("RSSI", "TxPower", "Name:", "Alias:", "Connected:", "Paired:", "Trusted:")
+
+WP_CONF_DIR = Path.home() / ".config" / "wireplumber" / "wireplumber.conf.d"
+WP_CONF_FILE = WP_CONF_DIR / "50-bluez-headless.conf"
+WP_CONF_TEXT = """wireplumber.profiles = {
+  main = {
+    monitor.bluez.seat-monitoring = disabled
+  }
+}
+
+monitor.bluez.properties = {
+  bluez5.roles = [ a2dp_sink a2dp_source hsp_hs hfp_hf ]
+}
+"""
 
 
 def list_tracks():
-    """Return a sorted list of .mp3 filenames found in the music folder."""
     if not MUSIC_DIR.exists():
         MUSIC_DIR.mkdir(parents=True, exist_ok=True)
         return []
@@ -21,12 +31,6 @@ def list_tracks():
 
 
 class Player:
-    """
-    Thin wrapper around mpg123.
-    One track plays at a time. Pause is done with SIGSTOP/SIGCONT so we
-    don't need to speak mpg123's remote-control protocol.
-    """
-
     def __init__(self):
         self._proc = None
         self._track = None
@@ -74,17 +78,10 @@ class Player:
         return self._track
 
     def finished(self) -> bool:
-        """True if a track was playing and has just ended on its own."""
         return self._proc is not None and self._proc.poll() is not None
 
 
 def set_output(mode: str):
-    """
-    Force the Pi's built-in analog output.
-    mode: 'aux' -> 3.5mm jack, 'hdmi' -> HDMI, 'auto' -> let ALSA decide.
-    Bluetooth is handled separately since it isn't one of the built-in
-    ALSA jack targets.
-    """
     target = {"aux": "1", "hdmi": "2", "auto": "0"}.get(mode, "0")
     subprocess.run(
         ["amixer", "cset", "numid=3", target],
@@ -93,10 +90,43 @@ def set_output(mode: str):
     )
 
 
+def ensure_headless_bt_audio() -> bool:
+    """
+    Headless Pi: WirePlumber won't load BlueZ A2DP unless seat-monitoring
+    is disabled. Write config once, keep pipewire stack running.
+    """
+    try:
+        WP_CONF_DIR.mkdir(parents=True, exist_ok=True)
+        need_restart = False
+        if not WP_CONF_FILE.exists() or WP_CONF_FILE.read_text() != WP_CONF_TEXT:
+            WP_CONF_FILE.write_text(WP_CONF_TEXT)
+            need_restart = True
+
+        env = os.environ.copy()
+        if "XDG_RUNTIME_DIR" not in env:
+            env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
+
+        subprocess.run(
+            ["systemctl", "--user", "start", "pipewire", "pipewire-pulse", "wireplumber"],
+            capture_output=True,
+            timeout=10,
+            env=env,
+        )
+        if need_restart:
+            subprocess.run(
+                ["systemctl", "--user", "restart", "pipewire", "pipewire-pulse", "wireplumber"],
+                capture_output=True,
+                timeout=15,
+                env=env,
+            )
+            time.sleep(2)
+        return True
+    except Exception as e:
+        print(f"[bt] ensure_headless_bt_audio failed: {e}")
+        return False
+
+
 def connect_bluetooth(mac: str) -> bool:
-    """
-    Reconnects to an already-paired/trusted Bluetooth audio device.
-    """
     if not mac:
         return False
     try:
@@ -104,19 +134,62 @@ def connect_bluetooth(mac: str) -> bool:
             ["bluetoothctl", "connect", mac],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=20,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
-    return "Connection successful" in result.stdout
+    return "Connection successful" in (result.stdout or "")
+
+
+def set_bluetooth_audio(mac: str) -> bool:
+    """Set default sink to the BlueZ output for this MAC."""
+    mac_id = mac.replace(":", "_").upper()
+    time.sleep(1.5)
+    try:
+        out = subprocess.check_output(
+            ["pactl", "list", "short", "sinks"],
+            text=True,
+            timeout=5,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        out = ""
+
+    sink = None
+    for line in out.splitlines():
+        if "bluez" in line.lower() and mac_id in line.upper().replace(":", "_"):
+            parts = line.split()
+            if len(parts) >= 2:
+                sink = parts[1]
+                break
+    if sink is None:
+        for line in out.splitlines():
+            if "bluez_output" in line.lower():
+                parts = line.split()
+                if len(parts) >= 2:
+                    sink = parts[1]
+                    break
+
+    if not sink:
+        return False
+    try:
+        subprocess.run(
+            ["pactl", "set-default-sink", sink],
+            capture_output=True,
+            timeout=5,
+        )
+        return True
+    except Exception:
+        return False
 
 
 def _lookup_name(mac: str):
-    """Ask bluetoothctl directly for a device's resolved Name/Alias."""
     try:
         result = subprocess.run(
             ["bluetoothctl", "info", mac],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None
@@ -130,97 +203,18 @@ def _lookup_name(mac: str):
 
 
 def scan_devices(timeout=10):
-    """
-    Scans for nearby Bluetooth devices for `timeout` seconds and returns
-    a sorted list of (mac, name) tuples with real device names where
-    available.
-
-    bluetoothctl first reports a newly-seen device using a placeholder
-    "name" that's just its MAC address with dashes instead of colons,
-    then follows up with a separate line once the real name/alias is
-    resolved. We track both and prefer the resolved one; for anything
-    still stuck on the placeholder after scanning, we do one more
-    explicit lookup via `bluetoothctl info`.
-
-    Requires a reasonably recent bluez (Raspberry Pi OS Bookworm ships one
-    new enough) for the non-interactive `bluetoothctl <cmd> <args>` form
-    and the `--timeout` scan flag.
-    """
+    ensure_headless_bt_audio()
     try:
         subprocess.run(
             ["bluetoothctl", "power", "on"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return []
-
-    output = ""
-    try:
-        result = subprocess.run(
-            ["bluetoothctl", "--timeout", str(timeout), "scan", "on"],
-            capture_output=True, text=True, timeout=timeout + 5,
-        )
-        output += result.stdout
-    except subprocess.TimeoutExpired:
-        pass
-    except FileNotFoundError:
-        return []
-
-    try:
-        result = subprocess.run(
-            ["bluetoothctl", "devices"],
-            capture_output=True, text=True, timeout=5,
-        )
-        output += "\n" + result.stdout
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except Exception:
         pass
 
-    devices = {}
-    for raw_line in output.splitlines():
-        line = raw_line.strip()
-        if line.startswith("[NEW]") or line.startswith("[CHG]") or line.startswith("[DEL]"):
-            line = line.split("]", 1)[1].strip()
-
-        name_match = NAME_LINE_RE.match(line)
-        if name_match:
-            mac, _, name = name_match.groups()
-            devices[mac] = name.strip()
-            continue
-
-        m = DEVICE_RE.match(line)
-        if not m:
-            continue
-        mac, rest = m.group(1), m.group(2).strip()
-        if rest.startswith(SKIP_PREFIXES):
-            continue
-        # Don't let a placeholder line clobber a name we already resolved.
-        devices.setdefault(mac, rest)
-
-    resolved = {}
-    for mac, name in devices.items():
-        looks_like_placeholder = name.replace("-", ":").upper() == mac.upper()
-        if looks_like_placeholder:
-            better = _lookup_name(mac)
-            resolved[mac] = better or name
-        else:
-            resolved[mac] = name
-
-    return sorted(resolved.items(), key=lambda kv: kv[1].lower())
-
-
-def pair_device(mac: str, timeout=30) -> bool:
-    """
-    Pairs, trusts, and connects to a device that scan_devices() found.
-
-    This runs as ONE persistent `bluetoothctl` session (via stdin/stdout
-    pipes) rather than separate one-shot calls. Each separate
-    `subprocess.run(["bluetoothctl", ...])` call is its own process, and
-    an agent registered ("agent on") in one of those processes is gone
-    the moment that process exits — so a later `pair` call has no agent
-    around to answer any confirmation prompt, and pairing can fail even
-    though the headset is sitting there in pairing mode. Keeping it all
-    in one session keeps the agent alive the whole time.
-    """
+    found = {}
     try:
         proc = subprocess.Popen(
             ["bluetoothctl"],
@@ -231,49 +225,59 @@ def pair_device(mac: str, timeout=30) -> bool:
             bufsize=1,
         )
     except FileNotFoundError:
-        return False
+        return []
 
-    def send(cmd, wait=2.0):
+    def send(cmd):
         try:
             proc.stdin.write(cmd + "\n")
             proc.stdin.flush()
-        except (BrokenPipeError, ValueError):
-            return
-        time.sleep(wait)
-
-    try:
-        send("agent on")
-        send("default-agent")
-        send(f"pair {mac}", wait=5.0)
-        # Auto-answer a "Confirm passkey ... (yes/no)" style prompt if
-        # one showed up. Harmless no-op if nothing was waiting on input.
-        send("yes", wait=2.0)
-        send(f"trust {mac}", wait=2.0)
-        send(f"connect {mac}", wait=3.0)
-        send("quit", wait=1.0)
-        out, _ = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        try:
-            out, _ = proc.communicate(timeout=5)
         except Exception:
-            out = ""
+            pass
+
+    send("scan on")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(0.4)
+        try:
+            result = subprocess.run(
+                ["bluetoothctl", "devices"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            for line in result.stdout.splitlines():
+                m = DEVICE_RE.match(line.strip())
+                if not m:
+                    continue
+                mac, name = m.group(1), m.group(2).strip()
+                if name.startswith("LE_"):
+                    continue
+                if name and name != mac.replace(":", "-"):
+                    found[mac] = name
+                elif mac not in found:
+                    found[mac] = name
+        except Exception:
+            pass
+
+    send("scan off")
+    send("quit")
+    try:
+        proc.communicate(timeout=3)
     except Exception:
         proc.kill()
-        out = ""
 
-    if "Connection successful" in out:
-        return True
+    resolved = {}
+    for mac, name in found.items():
+        if name.replace("-", ":").upper() == mac.upper() or name == mac.replace(":", "-"):
+            better = _lookup_name(mac)
+            resolved[mac] = better or name
+        else:
+            resolved[mac] = name
 
-    # Fall back to a plain reconnect attempt in case connect succeeded
-    # but the session output above was ambiguous.
-    return connect_bluetooth(mac)
+    return sorted(resolved.items(), key=lambda kv: kv[1].lower())
 
 
 class BluetoothScanner:
-    """Runs scan_devices() on a background thread so button input and the
-    screen can keep updating while the scan (several seconds) runs."""
-
     def __init__(self):
         self.done = False
         self.result = []
@@ -291,19 +295,118 @@ class BluetoothScanner:
 
 
 class BluetoothConnector:
-    """Runs pair_device() on a background thread for the same reason."""
+    """
+    Pair + trust + connect on a background thread.
+    If BlueZ asks for passkey confirmation:
+      needs_confirm = True, passkey may be set
+    App: LEFT=No, RIGHT=Yes -> answer(True/False)
+    """
 
     def __init__(self):
         self.done = False
         self.success = False
+        self.audio_ok = False
+        self.needs_confirm = False
+        self.passkey = ""
+        self._answer = None
+        self._answer_event = threading.Event()
         self._thread = None
 
     def start(self, mac):
         self.done = False
         self.success = False
+        self.audio_ok = False
+        self.needs_confirm = False
+        self.passkey = ""
+        self._answer = None
+        self._answer_event.clear()
         self._thread = threading.Thread(target=self._run, args=(mac,), daemon=True)
         self._thread.start()
 
+    def answer(self, yes: bool):
+        self._answer = yes
+        self.needs_confirm = False
+        self._answer_event.set()
+
     def _run(self, mac):
-        self.success = pair_device(mac)
+        ensure_headless_bt_audio()
+
+        try:
+            proc = subprocess.Popen(
+                ["bluetoothctl"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except FileNotFoundError:
+            self.done = True
+            return
+
+        def send(cmd):
+            try:
+                proc.stdin.write(cmd + "\n")
+                proc.stdin.flush()
+            except Exception:
+                pass
+
+        lines = []
+
+        def reader():
+            try:
+                for line in proc.stdout:
+                    lines.append(line)
+                    low = line.lower()
+                    if (
+                        "confirm passkey" in low
+                        or "confirm pairing" in low
+                        or "request confirmation" in low
+                    ):
+                        digits = re.findall(r"\d{4,6}", line)
+                        self.passkey = digits[0] if digits else ""
+                        self.needs_confirm = True
+                        self._answer_event.clear()
+                        if self._answer_event.wait(timeout=30):
+                            send("yes" if self._answer else "no")
+                        else:
+                            send("no")
+                            self.needs_confirm = False
+                    elif "enter pin" in low or "request passkey" in low:
+                        send("0000")
+            except Exception:
+                pass
+
+        t = threading.Thread(target=reader, daemon=True)
+        t.start()
+
+        send("power on")
+        time.sleep(0.5)
+        send("agent on")
+        time.sleep(0.5)
+        send("default-agent")
+        time.sleep(0.5)
+        send(f"pair {mac}")
+        time.sleep(12)
+        if not self._answer_event.is_set() and not self.needs_confirm:
+            send("yes")
+            time.sleep(1)
+        send(f"trust {mac}")
+        time.sleep(1.5)
+        send(f"connect {mac}")
+        time.sleep(5)
+        send("quit")
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+
+        out = "".join(lines)
+        ok = "Connection successful" in out or "Pairing successful" in out
+        if not ok:
+            ok = connect_bluetooth(mac)
+
+        self.success = ok
+        if ok:
+            self.audio_ok = set_bluetooth_audio(mac)
         self.done = True
