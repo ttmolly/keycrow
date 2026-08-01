@@ -11,6 +11,8 @@ import ui.splash_edit as splash_edit
 import ui.status_menu as status_menu
 import core.config as config
 from core.input import ButtonInput
+from core.app_manager import AppManager
+from apps.main.app import MainMenuApp
 from apps.wifi_scan import scan_networks
 
 # ===== Hardware =====
@@ -18,13 +20,13 @@ serial = i2c(port=1, address=0x3D)
 device = ssd1306(serial)
 buttons = ButtonInput()
 
+
 def run_splash():
     splash.show(device, buttons.get("OK"))
 
-def get_max_idx(current, status_mode=None):
-    if current == "main":
-        return len(main_menu.ITEMS) - 1
-    elif current == "wifi":
+
+def get_max_idx(current):
+    if current == "wifi":
         return len(wifi_menu.ITEMS) - 1
     elif current == "settings":
         return len(settings_menu.ITEMS) - 1
@@ -42,10 +44,9 @@ def get_max_idx(current, status_mode=None):
         return len(status_menu.get_menu_items()) - 1
     return 0
 
-def redraw(current, selected, scroll_offset, status_mode=None):
-    if current == "main":
-        return main_menu.draw(device, selected, scroll_offset)
-    elif current == "wifi":
+
+def redraw(current, selected, scroll_offset):
+    if current == "wifi":
         return wifi_menu.draw(device, selected, scroll_offset)
     elif current == "settings":
         return settings_menu.draw(device, selected, scroll_offset)
@@ -63,11 +64,12 @@ def redraw(current, selected, scroll_offset, status_mode=None):
         return status_menu.draw(device, selected, scroll_offset, mode="menus")
     return scroll_offset
 
+
 def draw_save_menu(selected, scroll_offset):
     from luma.core.render import canvas
     from PIL import ImageFont
     font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-    font_item  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+    font_item = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
     items = splash_edit.SAVE_ITEMS
     with canvas(device) as draw:
         draw.rectangle(device.bounding_box, outline="black", fill="black")
@@ -82,33 +84,76 @@ def draw_save_menu(selected, scroll_offset):
                 draw.text((5, y + 2), item, font=font_item, fill="white")
     return scroll_offset
 
+
 print("KeyCrow starting...")
 run_splash()
 
+# ===== App system (Main Menu only) =====
+manager = AppManager()
+manager.register(MainMenuApp())
+manager.push("main")
+
+# Legacy state for screens not yet converted
 current = "main"
 selected = 0
 scroll_offset = 0
 pending_edit = None
 
-scroll_offset = redraw(current, selected, scroll_offset)
+manager.current_app().draw(device)
 
 try:
     while True:
-        # ===== UP =====
+        # ---------- MAIN MENU (new app path) ----------
+        if current == "main":
+            app = manager.current_app()
+            action = None
+
+            if buttons.is_pressed("UP"):
+                action = app.handle_input("UP")
+                app.draw(device)
+                sleep(0.18)
+            elif buttons.is_pressed("DOWN"):
+                action = app.handle_input("DOWN")
+                app.draw(device)
+                sleep(0.18)
+            elif buttons.is_pressed("OK"):
+                action = app.handle_input("OK")
+                sleep(0.25)
+            elif buttons.is_pressed("BACK"):
+                action = app.handle_input("BACK")
+                sleep(0.2)
+
+            if action == "wifi":
+                current = "wifi"
+                selected = 0
+                scroll_offset = 0
+                scroll_offset = redraw(current, selected, scroll_offset)
+            elif action == "settings":
+                current = "settings"
+                selected = 0
+                scroll_offset = 0
+                scroll_offset = redraw(current, selected, scroll_offset)
+            elif action == "splash":
+                run_splash()
+                manager.current_app().on_enter()
+                manager.current_app().draw(device)
+
+            sleep(0.04)
+            continue
+
+        # ---------- LEGACY SCREENS (unchanged behavior) ----------
         if buttons.is_pressed("UP"):
             max_idx = get_max_idx(current)
             selected = (selected - 1) % (max_idx + 1)
             scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.18)
 
-        # ===== DOWN =====
         elif buttons.is_pressed("DOWN"):
             max_idx = get_max_idx(current)
             selected = (selected + 1) % (max_idx + 1)
             scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.18)
 
-        # ===== LEFT / RIGHT =====
         elif buttons.is_pressed("LEFT") or buttons.is_pressed("RIGHT"):
             if current == "splash_settings" and selected == 0:
                 available = splash_menu.get_available_splashes()
@@ -125,24 +170,8 @@ try:
                 scroll_offset = redraw(current, selected, scroll_offset)
                 sleep(0.18)
 
-        # ===== OK =====
         elif buttons.is_pressed("OK"):
-            if current == "main":
-                choice = main_menu.ITEMS[selected]
-                if choice == "WiFi Tools":
-                    current = "wifi"
-                    selected = 0
-                    scroll_offset = 0
-                    scroll_offset = redraw(current, selected, scroll_offset)
-                elif choice == "Settings":
-                    current = "settings"
-                    selected = 0
-                    scroll_offset = 0
-                    scroll_offset = redraw(current, selected, scroll_offset)
-                else:
-                    print(f"Selected: {choice}")
-
-            elif current == "wifi":
+            if current == "wifi":
                 choice = wifi_menu.ITEMS[selected]
                 if choice == "Scan Networks":
                     print("Scanning WiFi...")
@@ -157,9 +186,8 @@ try:
                     scroll_offset = redraw(current, selected, scroll_offset)
                 elif choice == "Back":
                     current = "main"
-                    selected = 0
-                    scroll_offset = 0
-                    scroll_offset = redraw(current, selected, scroll_offset)
+                    manager.current_app().on_enter()
+                    manager.current_app().draw(device)
 
             elif current == "settings":
                 choice = settings_menu.ITEMS[selected]
@@ -175,9 +203,8 @@ try:
                     scroll_offset = redraw(current, selected, scroll_offset)
                 elif choice == "Back":
                     current = "main"
-                    selected = 0
-                    scroll_offset = 0
-                    scroll_offset = redraw(current, selected, scroll_offset)
+                    manager.current_app().on_enter()
+                    manager.current_app().draw(device)
 
             elif current == "status_bar":
                 if selected == 0:
@@ -265,19 +292,11 @@ try:
 
             sleep(0.25)
 
-        # ===== BACK =====
         elif buttons.is_pressed("BACK"):
-            if current == "main":
-                run_splash()
+            if current in ["wifi", "settings"]:
                 current = "main"
-                selected = 0
-                scroll_offset = 0
-                scroll_offset = redraw(current, selected, scroll_offset)
-            elif current in ["wifi", "settings"]:
-                current = "main"
-                selected = 0
-                scroll_offset = 0
-                scroll_offset = redraw(current, selected, scroll_offset)
+                manager.current_app().on_enter()
+                manager.current_app().draw(device)
             elif current == "status_bar":
                 current = "settings"
                 selected = 0
@@ -306,7 +325,6 @@ try:
                 scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.2)
 
-        # Keep redrawing screens that need scrolling text
         if current in ["splash_settings", "status_splash", "status_menus"]:
             scroll_offset = redraw(current, selected, scroll_offset)
             sleep(0.05)
