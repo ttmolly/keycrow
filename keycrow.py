@@ -14,6 +14,7 @@ from core.input import ButtonInput
 from core.app_manager import AppManager
 from apps.main.app import MainMenuApp
 from apps.settings.app import SettingsApp
+from apps.wifi.app import WifiApp
 from apps.wifi_scan import scan_networks
 
 # ===== Hardware =====
@@ -27,9 +28,7 @@ def run_splash():
 
 
 def get_max_idx(current):
-    if current == "wifi":
-        return len(wifi_menu.ITEMS) - 1
-    elif current == "splash_settings":
+    if current == "splash_settings":
         return 2
     elif current == "splash_edit_pick":
         return len(splash_menu.get_edit_items()) - 1
@@ -45,9 +44,7 @@ def get_max_idx(current):
 
 
 def redraw(current, selected, scroll_offset):
-    if current == "wifi":
-        return wifi_menu.draw(device, selected, scroll_offset)
-    elif current == "splash_settings":
+    if current == "splash_settings":
         return splash_menu.draw(device, selected, scroll_offset)
     elif current == "splash_edit_pick":
         return splash_menu.draw_edit_pick(device, selected, scroll_offset)
@@ -89,10 +86,11 @@ run_splash()
 manager = AppManager()
 manager.register(MainMenuApp())
 manager.register(SettingsApp())
+manager.register(WifiApp())
 manager.push("main")
 
-# "main" and "settings_app" = app-owned screens
-# everything else = legacy screens
+# App-owned: "main", "settings_app", "wifi_app"
+# Everything else = legacy screens
 current = "main"
 selected = 0
 scroll_offset = 0
@@ -123,10 +121,9 @@ try:
                 sleep(0.2)
 
             if action == "wifi":
-                current = "wifi"
-                selected = 0
-                scroll_offset = 0
-                scroll_offset = redraw(current, selected, scroll_offset)
+                current = "wifi_app"
+                manager._apps["wifi"].on_enter()
+                manager._apps["wifi"].draw(device)
             elif action == "settings":
                 current = "settings_app"
                 manager._apps["settings"].on_enter()
@@ -177,6 +174,46 @@ try:
             sleep(0.04)
             continue
 
+        # ---------- WIFI APP ----------
+        if current == "wifi_app":
+            app = manager._apps["wifi"]
+            action = None
+
+            if buttons.is_pressed("UP"):
+                action = app.handle_input("UP")
+                app.draw(device)
+                sleep(0.18)
+            elif buttons.is_pressed("DOWN"):
+                action = app.handle_input("DOWN")
+                app.draw(device)
+                sleep(0.18)
+            elif buttons.is_pressed("OK"):
+                action = app.handle_input("OK")
+                sleep(0.25)
+            elif buttons.is_pressed("BACK"):
+                action = app.handle_input("BACK")
+                sleep(0.2)
+
+            if action == "scan":
+                print("Scanning WiFi...")
+                nets = scan_networks()
+                print("Found:", nets)
+                app.draw(device)
+            elif action == "connect":
+                try:
+                    import ui.wifi_setup as wifi_setup
+                    wifi_setup.run(device, buttons)
+                except Exception as e:
+                    print("WiFi setup error:", e)
+                app.draw(device)
+            elif action == "back":
+                current = "main"
+                manager._apps["main"].on_enter()
+                manager._apps["main"].draw(device)
+
+            sleep(0.04)
+            continue
+
         # ---------- LEGACY SCREENS ----------
         if buttons.is_pressed("UP"):
             max_idx = get_max_idx(current)
@@ -207,25 +244,7 @@ try:
                 sleep(0.18)
 
         elif buttons.is_pressed("OK"):
-            if current == "wifi":
-                choice = wifi_menu.ITEMS[selected]
-                if choice == "Scan Networks":
-                    print("Scanning WiFi...")
-                    nets = scan_networks()
-                    print("Found:", nets)
-                elif choice == "Connect":
-                    try:
-                        import ui.wifi_setup as wifi_setup
-                        wifi_setup.run(device, buttons)
-                    except Exception as e:
-                        print("WiFi setup error:", e)
-                    scroll_offset = redraw(current, selected, scroll_offset)
-                elif choice == "Back":
-                    current = "main"
-                    manager._apps["main"].on_enter()
-                    manager._apps["main"].draw(device)
-
-            elif current == "status_bar":
+            if current == "status_bar":
                 if selected == 0:
                     current = "status_splash"
                     selected = 0
@@ -236,7 +255,7 @@ try:
                     selected = 0
                     scroll_offset = 0
                     scroll_offset = redraw(current, selected, scroll_offset)
-                elif selected == 2:  # Back → Settings app
+                elif selected == 2:
                     current = "settings_app"
                     manager._apps["settings"].draw(device)
 
@@ -268,7 +287,7 @@ try:
                     selected = 0
                     scroll_offset = 0
                     scroll_offset = redraw(current, selected, scroll_offset)
-                elif selected == 2:  # Back → Settings app
+                elif selected == 2:
                     current = "settings_app"
                     manager._apps["settings"].draw(device)
 
@@ -308,11 +327,7 @@ try:
             sleep(0.25)
 
         elif buttons.is_pressed("BACK"):
-            if current == "wifi":
-                current = "main"
-                manager._apps["main"].on_enter()
-                manager._apps["main"].draw(device)
-            elif current == "status_bar":
+            if current == "status_bar":
                 current = "settings_app"
                 manager._apps["settings"].draw(device)
             elif current in ["status_splash", "status_menus"]:
