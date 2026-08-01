@@ -16,3 +16,9 @@ splash_charging = true
 splash_background = "black"
 splash_position = "top_center"
 splash_order = "battery_wifi_bt"
+
+[wifi_setup]
+ap_ssid = "KeyCrow-Setup"
+ap_password = "keycrow123"
+portal_ip = "10.42.0.1"
+portal_port = 8080

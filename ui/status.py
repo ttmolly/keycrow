@@ -1,6 +1,6 @@
 from PIL import ImageFont
 import subprocess
-import ui.config as config
+import core.config as config
 
 # ===== Icons =====
 WIFI_ICON = [
@@ -111,9 +111,17 @@ def get_status():
         "background": cfg.get("menu_background", "black"),
     }
 
+MENU_ORDER_MAP = {
+    "battery_wifi_bt": ["battery", "wifi", "bt"],
+    "bt_wifi_battery": ["bt", "wifi", "battery"],
+    "wifi_battery_bt": ["wifi", "battery", "bt"],
+    "battery_bt_wifi": ["battery", "bt", "wifi"],
+}
+
 def draw_menu_icons(draw, y=1):
     st = get_status()
     bg = st.get("background", "black")
+    cfg = config.load().get("status", {})
 
     if bg == "white":
         fill = "black"
@@ -122,34 +130,48 @@ def draw_menu_icons(draw, y=1):
         fill = "white"
         box_fill = "black"
 
+    order = cfg.get("menu_order", "battery_wifi_bt")
+    icon_order = MENU_ORDER_MAP.get(order, ["battery", "wifi", "bt"])
+
+    available = {
+        "bt": st["show_bluetooth"] and st["bluetooth"],
+        "wifi": st["show_wifi"] and st["wifi"],
+        "battery": st["show_battery"] and st["battery"] is not None,
+    }
+
     elements = []
-
-    if st["show_bluetooth"] and st["bluetooth"]:
-        elements.append(("bt", 10))
-
-    if st["show_wifi"] and st["wifi"]:
-        elements.append(("wifi", 10))
-
-    if st["show_battery"] and st["battery"] is not None:
-        w = 15
-        if st["show_percent"]:
-            w += 16
-        if st["show_charging"] and st["charging"]:
-            w += 9
-        elements.append(("battery", w))
+    for kind in icon_order:
+        if not available.get(kind):
+            continue
+        if kind == "battery":
+            w = 15
+            if st["show_percent"]:
+                w += 16
+            if st["show_charging"] and st["charging"]:
+                w += 9
+            elements.append(("battery", w))
+        else:
+            elements.append((kind, 10))
 
     if not elements:
         return
 
     total_w = sum(w for _, w in elements) + 3
-    x = 126 - total_w
+
+    position = cfg.get("menu_position", "right")
+    if position == "left":
+        x = 3
+    elif position == "center":
+        x = (128 - total_w) // 2
+    else:
+        x = 126 - total_w
 
     # Stronger background box for testing
     if bg != "none":
-        draw.rectangle((x - 3, 0, 127, 11), fill=box_fill)
-        draw.rectangle((x - 3, 0, 127, 11), outline=fill)
+        draw.rectangle((x - 3, 0, x - 3 + total_w + 3, 11), fill=box_fill)
+        draw.rectangle((x - 3, 0, x - 3 + total_w + 3, 11), outline=fill)
 
-    for kind, width in reversed(elements):
+    for kind, width in elements:
         if kind == "bt":
             _draw_icon(draw, x, y, BT_ICON, fill=fill)
         elif kind == "wifi":

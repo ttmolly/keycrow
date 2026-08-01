@@ -1,7 +1,7 @@
 from luma.core.render import canvas
 from PIL import ImageFont
 from time import time
-import ui.config as config
+import core.config as config
 import ui.status as status
 
 font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)

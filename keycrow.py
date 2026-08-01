@@ -10,7 +10,8 @@ import ui.settings_menu as settings_menu
 import ui.splash_menu as splash_menu
 import ui.splash_edit as splash_edit
 import ui.status_menu as status_menu
-import ui.config as config
+import ui.wifi_setup as wifi_setup
+import core.config as config
 from apps.wifi_scan import scan_networks
 
 # ===== Hardware =====
@@ -156,6 +157,9 @@ try:
                     print("Scanning WiFi...")
                     nets = scan_networks()
                     print("Found:", nets)
+                elif choice == "Connect":
+                    wifi_setup.run(device, buttons)
+                    scroll_offset = redraw(current, selected, scroll_offset)
                 elif choice == "Back":
                     current = "main"
                     selected = 0

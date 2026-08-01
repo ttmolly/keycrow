@@ -2,7 +2,7 @@ from PIL import Image, ImageFont, ImageDraw
 from luma.core.render import canvas
 from time import sleep
 from pathlib import Path
-import ui.config as config
+import core.config as config
 import ui.status as status
 
 SPLASHES_DIR = Path.home() / "keycrow" / "splashes"
