@@ -1,34 +1,41 @@
 class AppManager:
     """
-    Skeleton only. Not used by the main loop yet.
-    Will own registration, navigation stack, and the main loop later.
+    Owns registered apps and the active screen.
+    Public API only — no direct _apps access from outside.
     """
 
     def __init__(self):
         self._apps = {}
-        self._stack = []
+        self._current = None
 
     def register(self, app):
         self._apps[app.name] = app
 
-    def push(self, name: str):
+    def get(self, name: str):
+        """Return an app by name, or None."""
+        return self._apps.get(name)
+
+    def open(self, name: str):
+        """
+        Switch to an app by name.
+        Calls on_exit on the previous app and on_enter on the new one.
+        """
         app = self._apps.get(name)
         if app is None:
-            return
-        if self._stack:
-            self._stack[-1].on_exit()
-        self._stack.append(app)
+            return None
+
+        if self._current is not None and self._current is not app:
+            self._current.on_exit()
+
+        self._current = app
         app.on_enter()
+        return app
 
-    def pop(self):
-        if not self._stack:
-            return
-        self._stack[-1].on_exit()
-        self._stack.pop()
-        if self._stack:
-            self._stack[-1].on_enter()
+    def current(self):
+        """Return the active app, or None."""
+        return self._current
 
-    def current_app(self):
-        if self._stack:
-            return self._stack[-1]
-        return None
+    def current_name(self):
+        if self._current is None:
+            return None
+        return self._current.name
