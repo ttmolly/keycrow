@@ -49,14 +49,21 @@ It features a custom interface on a 1.3" OLED display with physical buttons, mod
 
 ## Getting Started
 
+## Getting Started
+
 1. Clone the repository
-2. Install dependencies:
+2. Create and activate a virtual environment:
+```bash
+   python3 -m venv venv
+   source venv/bin/activate
+```
+3. Install dependencies:
 ```bash
    pip install luma.oled gpiozero pillow toml
 ```
-3. Run:
+4. Run:
 ```bash
-   python keycrow.py
+   venv/bin/python keycrow.py
 ```
 
 For PiSugar 3 Plus button control and boot autostart, see
@@ -75,3 +82,34 @@ For PiSugar 3 Plus button control and boot autostart, see
 - IR tools
 - File browser (Archive)
 - More polished UI & animations
+
+
+## Managing the service
+
+Restart after a `keycrow.py` code change:
+```bash
+sudo systemctl restart keycrow.service
+```
+
+Stop / start individually:
+```bash
+sudo systemctl stop keycrow.service
+sudo systemctl start keycrow.service
+```
+
+Check current status:
+```bash
+systemctl status keycrow.service
+```
+
+Watch its live output while testing a change:
+```bash
+sudo journalctl -u keycrow.service -f -o cat
+```
+
+If you edit the `.service` file itself (not `keycrow.py`), reload
+systemd's config first, or your changes won't take effect:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart keycrow.service
+```
