@@ -41,6 +41,9 @@ class Player:
         path = MUSIC_DIR / filename
         if not path.exists():
             return False
+
+        # Use plain ALSA so it works when KeyCrow runs as a systemd service.
+        # Pulse (-o pulse) fails inside the service because of missing session env.
         self._proc = subprocess.Popen(
             ["mpg123", "-q", str(path)],
             stdout=subprocess.DEVNULL,
@@ -82,12 +85,103 @@ class Player:
 
 
 def set_output(mode: str):
+    """
+    Route audio to AUX / HDMI / auto and force a usable volume.
+    """
+    # Legacy ALSA (harmless)
     target = {"aux": "1", "hdmi": "2", "auto": "0"}.get(mode, "0")
     subprocess.run(
         ["amixer", "cset", "numid=3", target],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+    if mode == "bluetooth":
+        return
+
+    try:
+        out = subprocess.check_output(
+            ["pactl", "list", "short", "sinks"],
+            text=True,
+            timeout=5,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return
+
+    sinks = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            sinks.append(parts[1])
+
+    if not sinks:
+        return
+
+    chosen = None
+
+    if mode == "aux":
+        for name in sinks:
+            low = name.lower()
+            if "bluez" in low or "hdmi" in low:
+                continue
+            if any(k in low for k in (
+                "bcm2835", "headphones", "analog",
+                "stereo-fallback", "avjack", "mailbox"
+            )):
+                chosen = name
+                break
+        if chosen is None:
+            for name in sinks:
+                low = name.lower()
+                if "bluez" not in low and "hdmi" not in low:
+                    chosen = name
+                    break
+
+    elif mode == "hdmi":
+        for name in sinks:
+            if "hdmi" in name.lower() and "bluez" not in name.lower():
+                chosen = name
+                break
+
+    else:  # auto
+        try:
+            default = subprocess.check_output(
+                ["pactl", "get-default-sink"],
+                text=True,
+                timeout=3,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+            if default and "bluez" not in default.lower():
+                chosen = default
+        except Exception:
+            pass
+        if chosen is None:
+            for name in sinks:
+                if "bluez" not in name.lower():
+                    chosen = name
+                    break
+
+    if chosen:
+        subprocess.run(
+            ["pactl", "set-default-sink", chosen],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        # Force audible volume
+        subprocess.run(
+            ["pactl", "set-sink-volume", chosen, "80%"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        subprocess.run(
+            ["pactl", "set-sink-mute", chosen, "0"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
 
 
 def ensure_headless_bt_audio() -> bool:
@@ -175,6 +269,16 @@ def set_bluetooth_audio(mac: str) -> bool:
     try:
         subprocess.run(
             ["pactl", "set-default-sink", sink],
+            capture_output=True,
+            timeout=5,
+        )
+        subprocess.run(
+            ["pactl", "set-sink-volume", sink, "80%"],
+            capture_output=True,
+            timeout=5,
+        )
+        subprocess.run(
+            ["pactl", "set-sink-mute", sink, "0"],
             capture_output=True,
             timeout=5,
         )
