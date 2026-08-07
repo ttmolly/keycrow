@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KeyCrow</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0b0b0b;
+      color: #eee;
+      margin: 0;
+      padding: 12px;
+      max-width: 480px;
+      margin-inline: auto;
+    }
+    h1 { font-size: 1.25rem; margin: 0 0 8px; }
+    h2 { font-size: 1rem; margin: 18px 0 8px; color: #9cf; }
+    .card {
+      background: #161616;
+      border: 1px solid #333;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    button {
+      background: #222;
+      color: #fff;
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 0.95rem;
+    }
+    button:active { background: #333; }
+    button:disabled { opacity: 0.5; }
+    .muted { color: #888; font-size: 0.85rem; }
+    .err { color: #f88; font-size: 0.85rem; }
+    ul { list-style: none; padding: 0; margin: 0; }
+    li {
+      padding: 10px 8px;
+      border-bottom: 1px solid #2a2a2a;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+    }
+    li:last-child { border-bottom: none; }
+    .folder { color: #9cf; }
+  </style>
+</head>
+<body>
+  <h1>KeyCrow</h1>
+  <p class="muted">http://keycrow.local:8080</p>
+
+  <div class="card" id="status"><div class="muted">Loading…</div></div>
+
+  <h2>Volume</h2>
+  <div class="card row">
+    <button type="button" onclick="vol(-5)">−</button>
+    <span id="volLabel">—</span>
+    <button type="button" onclick="vol(5)">+</button>
+  </div>
+
+  <h2>Output</h2>
+  <div class="card row">
+    <button type="button" onclick="setOut('aux')">AUX</button>
+    <button type="button" onclick="setOut('bluetooth')">BLE</button>
+    <button type="button" onclick="setOut('auto')">Auto</button>
+  </div>
+
+  <h2>Now playing</h2>
+  <div class="card">
+    <div id="track">—</div>
+    <div class="row" style="margin-top:8px">
+      <button type="button" onclick="player('prev')">Prev</button>
+      <button type="button" onclick="player('pause')">Play/Pause</button>
+      <button type="button" onclick="player('next')">Next</button>
+      <button type="button" onclick="player('stop')">Stop</button>
+    </div>
+  </div>
+
+  <h2>Library</h2>
+  <div class="card">
+    <div class="muted" id="libPath">/</div>
+    <div class="muted" id="libInfo"></div>
+    <ul id="lib"></ul>
+  </div>
+
+  <h2>Bluetooth (paired)</h2>
+  <div class="card">
+    <ul id="bt"></ul>
+    <p class="muted" id="btMsg"></p>
+  </div>
+
+<script>
+async function j(url, opts) {
+  const r = await fetch(url, opts);
+  return r.json();
+}
+
+async function refreshStatus() {
+  const s = await j('/api/status');
+  document.getElementById('status').innerHTML =
+    `Battery: ${s.battery ?? '—'}%${s.charging ? ' (charging)' : ''}<br>` +
+    `WiFi: ${s.wifi ? 'yes' : 'no'} · BT: ${s.bluetooth ? 'on' : 'off'}<br>` +
+    `Output: <b>${s.output}</b><br>` +
+    `<span class="muted">${s.music_dir || ''}</span>`;
+  document.getElementById('volLabel').textContent = s.volume + '%';
+  document.getElementById('track').textContent =
+    s.track ? (s.paused ? '⏸ ' : '▶ ') + s.track : 'Nothing playing';
+}
+
+async function vol(delta) {
+  await j('/api/volume', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({delta}),
+  });
+  refreshStatus();
+}
+
+async function setOut(mode) {
+  await j('/api/output', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({mode}),
+  });
+  refreshStatus();
+}
+
+async function player(action) {
+  await j('/api/player', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action}),
+  });
+  refreshStatus();
+}
+
+let libPath = '';
+
+async function loadLib(path) {
+  libPath = path || '';
+  const data = await j('/api/library?path=' + encodeURIComponent(libPath));
+  document.getElementById('libPath').textContent = '/' + (data.path || '');
+  document.getElementById('libInfo').textContent =
+    data.error ? ('Error: ' + data.error) :
+    ((data.count || 0) + ' items · ' + (data.music_dir || ''));
+  const ul = document.getElementById('lib');
+  ul.innerHTML = '';
+  if (libPath) {
+    const parent = libPath.includes('/') ? libPath.split('/').slice(0, -1).join('/') : '';
+    const back = document.createElement('li');
+    back.innerHTML = '<span class="folder">..</span>';
+    back.onclick = () => loadLib(parent);
+    ul.appendChild(back);
+  }
+  if (!data.items || !data.items.length) {
+    const empty = document.createElement('li');
+    empty.innerHTML = '<span class="muted">No songs or folders here</span>';
+    ul.appendChild(empty);
+    return;
+  }
+  for (const item of data.items) {
+    const li = document.createElement('li');
+    if (item.is_dir) {
+      li.innerHTML = `<span class="folder">${item.name}/</span>`;
+      li.onclick = () => loadLib(item.rel);
+    } else {
+      const name = item.name.replace(/\.mp3$/i, '');
+      li.innerHTML = `<span>${name}</span><button type="button">Play</button>`;
+      li.querySelector('button').onclick = async (e) => {
+        e.stopPropagation();
+        const btn = e.target;
+        if (btn.disabled) return;
+        btn.disabled = true;
+        try {
+          await j('/api/play', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({path: item.rel}),
+          });
+          await refreshStatus();
+        } finally {
+          setTimeout(() => { btn.disabled = false; }, 800);
+        }
+      };
+    }
+    ul.appendChild(li);
+  }
+}
+
+async function loadBt() {
+  const data = await j('/api/bt/paired');
+  const ul = document.getElementById('bt');
+  ul.innerHTML = '';
+  if (data.error) {
+    document.getElementById('btMsg').textContent = 'Error: ' + data.error;
+  }
+  if (!data.devices || !data.devices.length) {
+    ul.innerHTML = '<li class="muted">No paired devices found</li>';
+    return;
+  }
+  for (const d of data.devices) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span>${d.name}</span><button type="button">Connect</button>`;
+    li.querySelector('button').onclick = async () => {
+      document.getElementById('btMsg').textContent = 'Connecting…';
+      await j('/api/bt/connect', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mac: d.mac}),
+      });
+      const t = setInterval(async () => {
+        const st = await j('/api/bt/connect/status');
+        if (st.needs_confirm) {
+          document.getElementById('btMsg').textContent =
+            'Confirm on device PIN ' + (st.passkey || '');
+        }
+        if (st.done) {
+          clearInterval(t);
+          document.getElementById('btMsg').textContent =
+            st.success ? 'Connected' : 'Failed';
+          refreshStatus();
+        }
+      }, 500);
+    };
+    ul.appendChild(li);
+  }
+}
+
+refreshStatus();
+loadLib('');
+loadBt();
+setInterval(refreshStatus, 3000);
+</script>
+</body>
+</html>

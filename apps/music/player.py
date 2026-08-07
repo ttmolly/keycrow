@@ -51,22 +51,32 @@ def list_library(rel_path=""):
 
 
 def list_paired_devices():
-    try:
-        result = subprocess.run(
-            ["bluetoothctl", "devices", "Paired"],
-            capture_output=True,
-            text=True,
-            timeout=8,
-        )
-    except Exception:
-        return []
-
-    found = []
-    for line in (result.stdout or "").splitlines():
-        m = DEVICE_RE.match(line.strip())
-        if m:
-            found.append((m.group(1), m.group(2).strip()))
-    return sorted(found, key=lambda kv: kv[1].lower())
+    """Return list of (mac, name) for paired Bluetooth devices."""
+    found = {}
+    commands = (
+        ["bluetoothctl", "devices", "Paired"],
+        ["bluetoothctl", "paired-devices"],
+        ["bluetoothctl", "devices"],
+    )
+    for cmd in commands:
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+        except Exception:
+            continue
+        for line in (result.stdout or "").splitlines():
+            m = DEVICE_RE.match(line.strip())
+            if not m:
+                continue
+            mac, name = m.group(1), m.group(2).strip()
+            found[mac] = name
+        if found and cmd != ["bluetoothctl", "devices"]:
+            break
+    return sorted(found.items(), key=lambda kv: kv[1].lower())
 
 
 def get_duration(path: Path) -> float:
@@ -109,7 +119,6 @@ def get_volume() -> int:
             return max(0, min(100, int(m.group(1))))
     except Exception:
         pass
-
     try:
         out = subprocess.check_output(
             ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
@@ -127,14 +136,12 @@ def get_volume() -> int:
 
 def set_volume(percent: int) -> int:
     percent = max(0, min(100, int(percent)))
-
     for control in ("Master", "PCM", "Headphone"):
         subprocess.run(
             ["amixer", "sset", control, f"{percent}%", "unmute"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-
     try:
         subprocess.run(
             ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"],
@@ -150,7 +157,6 @@ def set_volume(percent: int) -> int:
         )
     except Exception:
         pass
-
     try:
         import core.config as config
         cfg = config.load()
@@ -159,7 +165,6 @@ def set_volume(percent: int) -> int:
         config.save(cfg)
     except Exception:
         pass
-
     return percent
 
 
@@ -178,12 +183,10 @@ class Player:
         path = MUSIC_DIR / filename
         if not path.exists():
             return False
-
         self._duration = get_duration(path)
         self._play_started = time.monotonic()
         self._total_paused = 0.0
         self._pause_started = None
-
         self._proc = subprocess.Popen(
             ["mpg123", "-q", str(path)],
             stdout=subprocess.DEVNULL,
@@ -253,25 +256,20 @@ def set_output(mode: str):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-
-    # Keep last saved volume if present, else 80%
     try:
         import core.config as config
         vol = config.load().get("music", {}).get("volume", 80)
     except Exception:
         vol = 80
     vol = max(0, min(100, int(vol)))
-
     for control in ("Master", "PCM", "Headphone"):
         subprocess.run(
             ["amixer", "sset", control, f"{vol}%", "unmute"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-
     if mode == "bluetooth":
         return
-
     try:
         out = subprocess.check_output(
             ["pactl", "list", "short", "sinks"],
@@ -281,18 +279,14 @@ def set_output(mode: str):
         )
     except Exception:
         return
-
     sinks = []
     for line in out.splitlines():
         parts = line.split()
         if len(parts) >= 2:
             sinks.append(parts[1])
-
     if not sinks:
         return
-
     chosen = None
-
     if mode == "aux":
         for name in sinks:
             low = name.lower()
@@ -310,13 +304,11 @@ def set_output(mode: str):
                 if "bluez" not in low and "hdmi" not in low:
                     chosen = name
                     break
-
     elif mode == "hdmi":
         for name in sinks:
             if "hdmi" in name.lower() and "bluez" not in name.lower():
                 chosen = name
                 break
-
     else:
         try:
             default = subprocess.check_output(
@@ -334,7 +326,6 @@ def set_output(mode: str):
                 if "bluez" not in name.lower():
                     chosen = name
                     break
-
     if chosen:
         subprocess.run(
             ["pactl", "set-default-sink", chosen],
@@ -363,11 +354,9 @@ def ensure_headless_bt_audio() -> bool:
         if not WP_CONF_FILE.exists() or WP_CONF_FILE.read_text() != WP_CONF_TEXT:
             WP_CONF_FILE.write_text(WP_CONF_TEXT)
             need_restart = True
-
         env = os.environ.copy()
         if "XDG_RUNTIME_DIR" not in env:
             env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
-
         subprocess.run(
             ["systemctl", "--user", "start", "pipewire", "pipewire-pulse", "wireplumber"],
             capture_output=True,
@@ -415,7 +404,6 @@ def set_bluetooth_audio(mac: str) -> bool:
         )
     except Exception:
         out = ""
-
     sink = None
     for line in out.splitlines():
         if "bluez" in line.lower() and mac_id in line.upper().replace(":", "_"):
@@ -430,17 +418,14 @@ def set_bluetooth_audio(mac: str) -> bool:
                 if len(parts) >= 2:
                     sink = parts[1]
                     break
-
     if not sink:
         return False
-
     try:
         import core.config as config
         vol = config.load().get("music", {}).get("volume", 80)
     except Exception:
         vol = 80
     vol = max(0, min(100, int(vol)))
-
     try:
         subprocess.run(
             ["pactl", "set-default-sink", sink],
@@ -492,7 +477,6 @@ def scan_devices(timeout=10):
         )
     except Exception:
         pass
-
     found = {}
     try:
         proc = subprocess.Popen(
@@ -537,14 +521,12 @@ def scan_devices(timeout=10):
                     found[mac] = name
         except Exception:
             pass
-
     send("scan off")
     send("quit")
     try:
         proc.communicate(timeout=3)
     except Exception:
         proc.kill()
-
     resolved = {}
     for mac, name in found.items():
         if name.replace("-", ":").upper() == mac.upper() or name == mac.replace(":", "-"):
@@ -552,7 +534,6 @@ def scan_devices(timeout=10):
             resolved[mac] = better or name
         else:
             resolved[mac] = name
-
     return sorted(resolved.items(), key=lambda kv: kv[1].lower())
 
 
@@ -602,7 +583,6 @@ class BluetoothConnector:
 
     def _run(self, mac):
         ensure_headless_bt_audio()
-
         try:
             proc = subprocess.Popen(
                 ["bluetoothctl"],
@@ -651,7 +631,6 @@ class BluetoothConnector:
 
         t = threading.Thread(target=reader, daemon=True)
         t.start()
-
         send("power on")
         time.sleep(0.5)
         send("agent on")
@@ -672,12 +651,10 @@ class BluetoothConnector:
             proc.wait(timeout=5)
         except Exception:
             proc.kill()
-
         out = "".join(lines)
         ok = "Connection successful" in out or "Pairing successful" in out
         if not ok:
             ok = connect_bluetooth(mac)
-
         self.success = ok
         if ok:
             self.audio_ok = set_bluetooth_audio(mac)
