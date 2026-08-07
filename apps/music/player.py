@@ -23,11 +23,144 @@ monitor.bluez.properties = {
 """
 
 
-def list_tracks():
-    if not MUSIC_DIR.exists():
-        MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+def list_tracks(rel_path=""):
+    folder = MUSIC_DIR / rel_path if rel_path else MUSIC_DIR
+    if not folder.exists():
+        folder.mkdir(parents=True, exist_ok=True)
         return []
-    return sorted(p.name for p in MUSIC_DIR.glob("*.mp3"))
+    return sorted(p.name for p in folder.glob("*.mp3"))
+
+
+def list_library(rel_path=""):
+    folder = MUSIC_DIR / rel_path if rel_path else MUSIC_DIR
+    if not folder.exists():
+        folder.mkdir(parents=True, exist_ok=True)
+        return []
+
+    items = []
+    for p in sorted(folder.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+        if p.name.startswith("."):
+            continue
+        if p.is_dir():
+            rel = str(Path(rel_path) / p.name) if rel_path else p.name
+            items.append({"name": p.name, "is_dir": True, "rel": rel})
+        elif p.suffix.lower() == ".mp3":
+            rel = str(Path(rel_path) / p.name) if rel_path else p.name
+            items.append({"name": p.name, "is_dir": False, "rel": rel})
+    return items
+
+
+def list_paired_devices():
+    try:
+        result = subprocess.run(
+            ["bluetoothctl", "devices", "Paired"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except Exception:
+        return []
+
+    found = []
+    for line in (result.stdout or "").splitlines():
+        m = DEVICE_RE.match(line.strip())
+        if m:
+            found.append((m.group(1), m.group(2).strip()))
+    return sorted(found, key=lambda kv: kv[1].lower())
+
+
+def get_duration(path: Path) -> float:
+    try:
+        out = subprocess.check_output(
+            [
+                "ffprobe", "-v", "quiet",
+                "-show_entries", "format=duration",
+                "-of", "csv=p=0",
+                str(path),
+            ],
+            text=True,
+            timeout=5,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        if out:
+            return max(0.0, float(out))
+    except Exception:
+        pass
+    try:
+        from mutagen.mp3 import MP3
+        audio = MP3(str(path))
+        if audio and audio.info:
+            return max(0.0, float(audio.info.length))
+    except Exception:
+        pass
+    return 0.0
+
+
+def get_volume() -> int:
+    try:
+        out = subprocess.check_output(
+            ["amixer", "sget", "Master"],
+            text=True,
+            timeout=3,
+            stderr=subprocess.DEVNULL,
+        )
+        m = re.search(r"\[(\d+)%\]", out)
+        if m:
+            return max(0, min(100, int(m.group(1))))
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.check_output(
+            ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
+            text=True,
+            timeout=3,
+            stderr=subprocess.DEVNULL,
+        )
+        m = re.search(r"(\d+)%", out)
+        if m:
+            return max(0, min(100, int(m.group(1))))
+    except Exception:
+        pass
+    return 80
+
+
+def set_volume(percent: int) -> int:
+    percent = max(0, min(100, int(percent)))
+
+    for control in ("Master", "PCM", "Headphone"):
+        subprocess.run(
+            ["amixer", "sset", control, f"{percent}%", "unmute"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    try:
+        subprocess.run(
+            ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+        subprocess.run(
+            ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+    except Exception:
+        pass
+
+    try:
+        import core.config as config
+        cfg = config.load()
+        cfg.setdefault("music", {})
+        cfg["music"]["volume"] = percent
+        config.save(cfg)
+    except Exception:
+        pass
+
+    return percent
 
 
 class Player:
@@ -35,6 +168,10 @@ class Player:
         self._proc = None
         self._track = None
         self._paused = False
+        self._duration = 0.0
+        self._play_started = 0.0
+        self._total_paused = 0.0
+        self._pause_started = None
 
     def play(self, filename: str) -> bool:
         self.stop()
@@ -42,14 +179,17 @@ class Player:
         if not path.exists():
             return False
 
-        # Use plain ALSA so it works when KeyCrow runs as a systemd service.
-        # Pulse (-o pulse) fails inside the service because of missing session env.
+        self._duration = get_duration(path)
+        self._play_started = time.monotonic()
+        self._total_paused = 0.0
+        self._pause_started = None
+
         self._proc = subprocess.Popen(
             ["mpg123", "-q", str(path)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        self._track = filename
+        self._track = path.name
         self._paused = False
         return True
 
@@ -58,9 +198,13 @@ class Player:
             return
         if self._paused:
             self._proc.send_signal(signal.SIGCONT)
+            if self._pause_started is not None:
+                self._total_paused += time.monotonic() - self._pause_started
+                self._pause_started = None
             self._paused = False
         else:
             self._proc.send_signal(signal.SIGSTOP)
+            self._pause_started = time.monotonic()
             self._paused = True
 
     def is_paused(self) -> bool:
@@ -76,6 +220,10 @@ class Player:
         self._proc = None
         self._track = None
         self._paused = False
+        self._duration = 0.0
+        self._play_started = 0.0
+        self._total_paused = 0.0
+        self._pause_started = None
 
     def current_track(self):
         return self._track
@@ -83,18 +231,43 @@ class Player:
     def finished(self) -> bool:
         return self._proc is not None and self._proc.poll() is not None
 
+    def duration(self) -> float:
+        return self._duration
+
+    def elapsed(self) -> float:
+        if self._play_started <= 0:
+            return 0.0
+        if self._paused and self._pause_started is not None:
+            t = self._pause_started - self._play_started - self._total_paused
+        else:
+            t = time.monotonic() - self._play_started - self._total_paused
+        if self._duration > 0:
+            t = min(t, self._duration)
+        return max(0.0, t)
+
 
 def set_output(mode: str):
-    """
-    Route audio to AUX / HDMI / auto and force a usable volume.
-    """
-    # Legacy ALSA (harmless)
     target = {"aux": "1", "hdmi": "2", "auto": "0"}.get(mode, "0")
     subprocess.run(
         ["amixer", "cset", "numid=3", target],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+    # Keep last saved volume if present, else 80%
+    try:
+        import core.config as config
+        vol = config.load().get("music", {}).get("volume", 80)
+    except Exception:
+        vol = 80
+    vol = max(0, min(100, int(vol)))
+
+    for control in ("Master", "PCM", "Headphone"):
+        subprocess.run(
+            ["amixer", "sset", control, f"{vol}%", "unmute"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     if mode == "bluetooth":
         return
@@ -144,7 +317,7 @@ def set_output(mode: str):
                 chosen = name
                 break
 
-    else:  # auto
+    else:
         try:
             default = subprocess.check_output(
                 ["pactl", "get-default-sink"],
@@ -169,9 +342,8 @@ def set_output(mode: str):
             stderr=subprocess.DEVNULL,
             timeout=5,
         )
-        # Force audible volume
         subprocess.run(
-            ["pactl", "set-sink-volume", chosen, "80%"],
+            ["pactl", "set-sink-volume", chosen, f"{vol}%"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=5,
@@ -185,10 +357,6 @@ def set_output(mode: str):
 
 
 def ensure_headless_bt_audio() -> bool:
-    """
-    Headless Pi: WirePlumber won't load BlueZ A2DP unless seat-monitoring
-    is disabled. Write config once, keep pipewire stack running.
-    """
     try:
         WP_CONF_DIR.mkdir(parents=True, exist_ok=True)
         need_restart = False
@@ -236,7 +404,6 @@ def connect_bluetooth(mac: str) -> bool:
 
 
 def set_bluetooth_audio(mac: str) -> bool:
-    """Set default sink to the BlueZ output for this MAC."""
     mac_id = mac.replace(":", "_").upper()
     time.sleep(1.5)
     try:
@@ -266,6 +433,14 @@ def set_bluetooth_audio(mac: str) -> bool:
 
     if not sink:
         return False
+
+    try:
+        import core.config as config
+        vol = config.load().get("music", {}).get("volume", 80)
+    except Exception:
+        vol = 80
+    vol = max(0, min(100, int(vol)))
+
     try:
         subprocess.run(
             ["pactl", "set-default-sink", sink],
@@ -273,7 +448,7 @@ def set_bluetooth_audio(mac: str) -> bool:
             timeout=5,
         )
         subprocess.run(
-            ["pactl", "set-sink-volume", sink, "80%"],
+            ["pactl", "set-sink-volume", sink, f"{vol}%"],
             capture_output=True,
             timeout=5,
         )
@@ -399,13 +574,6 @@ class BluetoothScanner:
 
 
 class BluetoothConnector:
-    """
-    Pair + trust + connect on a background thread.
-    If BlueZ asks for passkey confirmation:
-      needs_confirm = True, passkey may be set
-    App: LEFT=No, RIGHT=Yes -> answer(True/False)
-    """
-
     def __init__(self):
         self.done = False
         self.success = False
